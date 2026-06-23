@@ -77,17 +77,36 @@ function deskList(profile) {
   return [...builtins, ...custom];
 }
 
-// Turn learned weights into a short, honest prompt hint.
-function prefHint(profile) {
+// Turn learned weights into a desk-specific prompt hint: which of THIS desk's
+// content types to favour/ease off, a tone nudge from how much the reader likes
+// the desk overall, and a little of their broader cross-desk taste. This is what
+// lets each desk's personality drift with what the reader likes and dislikes.
+function prefHint(profile, desk) {
   const w = (profile && profile.weights) || {};
-  const entries = Object.entries(w).filter(([, v]) => typeof v === "number" && isFinite(v));
-  const liked = entries.filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]).slice(0, 10).map(([k]) => k.replace(/^desk:/, ""));
-  const disliked = entries.filter(([, v]) => v < 0).sort((a, b) => a[1] - b[1]).slice(0, 10).map(([k]) => k.replace(/^desk:/, ""));
-  if (!liked.length && !disliked.length) return "";
-  let s = "\nReader preferences, learned from what they engage with:";
-  if (liked.length) s += ` lean towards — ${liked.join(", ")};`;
-  if (disliked.length) s += ` de-emphasise — ${disliked.join(", ")};`;
-  s += " let this gently shape selection, but relevance and accuracy come first — never fabricate, distort, or pad to match preferences.";
+  const val = k => (typeof w[k] === "number" && isFinite(w[k])) ? w[k] : 0;
+  const types = (desk && desk.types) || [];
+  const likedT = types.filter(t => val(t) > 0).sort((a, b) => val(b) - val(a));
+  const dislikedT = types.filter(t => val(t) < 0).sort((a, b) => val(a) - val(b));
+  const deskW = desk ? val("desk:" + desk.id) : 0;
+
+  const all = Object.keys(w).filter(k => !k.startsWith("desk:"));
+  const gLiked = all.filter(k => val(k) > 0 && !types.includes(k)).sort((a, b) => val(b) - val(a)).slice(0, 6);
+  const gDisliked = all.filter(k => val(k) < 0 && !types.includes(k)).sort((a, b) => val(a) - val(b)).slice(0, 6);
+
+  let s = "";
+  if (likedT.length || dislikedT.length) {
+    s += "\nWithin this desk:";
+    if (likedT.length) s += ` favour ${likedT.join(", ")};`;
+    if (dislikedT.length) s += ` go lighter on ${dislikedT.join(", ")};`;
+  }
+  if (deskW >= 2) s += "\nThe reader clearly loves this desk — lean into its personality, with a touch more energy and generosity.";
+  else if (deskW <= -2) s += "\nThe reader is lukewarm on this desk — dial the personality back, be more selective and matter-of-fact, and raise the bar for inclusion.";
+  if (gLiked.length || gDisliked.length) {
+    s += "\nTheir broader taste:";
+    if (gLiked.length) s += ` they engage with ${gLiked.join(", ")};`;
+    if (gDisliked.length) s += ` they skip ${gDisliked.join(", ")};`;
+  }
+  if (s) s += "\nLet this shape selection and tone, but relevance and accuracy come first — never fabricate, distort, or pad to match preferences.";
   return s;
 }
 
@@ -292,9 +311,9 @@ const inflight = new Map();
 async function buildBriefing(env, profile, writeKeys) {
   const desks = deskList(profile);
   const order = desks.map(d => d.id);
-  const hint = prefHint(profile);
   // Fetch every desk in parallel — wall time is the slowest desk, not the sum.
-  const results = await Promise.all(desks.map(d => fetchDesk(env, d, hint)));
+  // Each desk gets its OWN preference hint so its personality adapts individually.
+  const results = await Promise.all(desks.map(d => fetchDesk(env, d, prefHint(profile, d))));
   const byCat = {}; let fixture = null; const report = {};
   desks.forEach((d, i) => {
     const r = results[i];

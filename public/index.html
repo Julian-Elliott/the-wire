@@ -60,6 +60,19 @@ a{ color:inherit; text-decoration:none; }
 .linkbtn:hover{ border-color:var(--amber); color:var(--text); }
 .hint{ color:var(--faint); font-size:11.5px; margin-top:2px; }
 
+.desk{ border:1px solid var(--line); border-radius:11px; padding:10px 12px; margin-bottom:8px; background:var(--panel2); }
+.desk.off{ opacity:.5; }
+.desk-h{ display:flex; align-items:center; gap:8px; }
+.desk-dot{ width:9px; height:9px; border-radius:50%; flex:0 0 auto; }
+.desk-name{ font-weight:600; font-size:13.5px; }
+.desk-persona{ font-family:'JetBrains Mono',monospace; font-size:9.5px; letter-spacing:.04em; color:var(--faint); }
+.desk-toggle{ margin-left:auto; background:var(--panel); border:1px solid var(--line); color:var(--text); border-radius:7px; padding:3px 11px; font-size:11.5px; cursor:pointer; font-family:'Inter',sans-serif; }
+.desk.off .desk-toggle{ color:var(--muted); }
+.desk-rm{ background:transparent; border:1px solid var(--line); color:var(--faint); border-radius:7px; padding:3px 9px; font-size:11.5px; cursor:pointer; font-family:'Inter',sans-serif; }
+.desk-rm:hover{ color:var(--down); border-color:var(--down); }
+.desk-voice{ color:var(--muted); font-size:12.5px; margin-top:6px; line-height:1.45; }
+.desk-lean{ font-family:'JetBrains Mono',monospace; font-size:10.5px; color:var(--muted); margin-top:7px; }
+
 .hero{ max-width:760px; margin:0 auto; padding:26px 20px 8px; }
 .hello{ font-family:'Bricolage Grotesque',sans-serif; font-weight:700; font-size:30px; margin:0 0 6px; letter-spacing:-.015em; }
 .sum{ margin:0; color:var(--muted); font-size:14.5px; }
@@ -116,12 +129,12 @@ a{ color:inherit; text-decoration:none; }
 <script>
 // ---- built-in desk presentation -----------------------------------------
 const CATS = {
-  liverpool: { label:"Liverpool",      accent:"var(--red)",    persona:"The Campaigner · ENFP" },
-  worcester: { label:"Worcester & UK", accent:"var(--green)",  persona:"The Consul · ESFJ" },
-  gaming:    { label:"Gaming",         accent:"var(--violet)", persona:"The Debater · ENTP" },
-  ev:        { label:"EV & Battery",   accent:"var(--teal)",   persona:"The Showman · ESTP" },
-  markets:   { label:"Markets",        accent:"var(--amber)",  persona:"The Architect · INTJ" },
-  world:     { label:"World",          accent:"var(--sky)",    persona:"The Advocate · INFJ" },
+  liverpool: { label:"Liverpool",      accent:"var(--red)",    persona:"The Campaigner · ENFP", voice:"Breathless and optimistic — sees the upside, but honest about confirmed vs rumour.", types:["Confirmed","Transfer news","Injury update","Tactics","Press conference","Match preview"] },
+  worcester: { label:"Worcester & UK", accent:"var(--green)",  persona:"The Consul · ESFJ",     voice:"Warm and neighbourly — practical local news that affects daily life.", types:["Local council","Roads & rail","Community","Local business","Events","UK national"] },
+  gaming:    { label:"Gaming",         accent:"var(--violet)", persona:"The Debater · ENTP",    voice:"Quick-witted and irreverent — loves the business chess and the contradictions.", types:["Industry","Release","Review","Hardware","Esports","Deal"] },
+  ev:        { label:"EV & Battery",   accent:"var(--teal)",   persona:"The Showman · ESTP",    voice:"Bombastic petrolhead in plain English — always in £ and real running costs.", types:["New EV","Home battery","Solar","Charging","Running costs","Tariffs"] },
+  markets:   { label:"Markets",        accent:"var(--amber)",  persona:"The Architect · INTJ",  voice:"Cool, systems-minded analyst — cause and effect, probabilities, no hype.", types:["Index move","Bonds & rates","Economic data","Earnings","Currency"] },
+  world:     { label:"World",          accent:"var(--sky)",    persona:"The Advocate · INFJ",   voice:"Measured and principled — human stakes and the longer arc.", types:["Politics","International","Business","Science","Technology"] },
 };
 const BUILTIN_ORDER = ["liverpool","worcester","gaming","ev","markets","world"];
 const PALETTE = ["var(--violet)","var(--sky)","var(--teal)","var(--green)","var(--amber)","var(--red)"];
@@ -178,6 +191,22 @@ function deskOrder(){
 function w(){ return state.profile.weights; }
 function bump(key, delta){ w()[key] = Math.max(-10, Math.min(10, (w()[key]||0) + delta)); }
 function score(it){ return (w()[it.contentType]||0) + (w()["desk:"+it.category]||0); }
+function deskTypes(id){ if(CATS[id]) return CATS[id].types||[]; const cd=customById(id); return (cd&&cd.types)||[]; }
+
+// How a desk's personality is currently leaning, from what you like/dislike.
+function deskLean(id){
+  const ww = w(); const deskW = ww["desk:"+id]||0; const types = deskTypes(id);
+  const liked = types.filter(t=>(ww[t]||0)>0).sort((a,b)=>(ww[b]||0)-(ww[a]||0));
+  const disliked = types.filter(t=>(ww[t]||0)<0).sort((a,b)=>(ww[a]||0)-(ww[b]||0));
+  const head = deskW>=2 ? "Turned up — leaning into what you love here"
+    : deskW<=-2 ? "Kept tight — higher bar, only the strongest"
+    : (liked.length||disliked.length) ? "Tuning to your taste"
+    : "Learning your taste — swipe to shape it";
+  const bits = [];
+  if(liked.length) bits.push("more "+liked.slice(0,2).join(", "));
+  if(disliked.length) bits.push("less "+disliked.slice(0,2).join(", "));
+  return { head, detail: bits.join(" · ") };
+}
 
 function baseItems(){
   if(!state.data || !state.data.items) return [];
@@ -387,12 +416,9 @@ function render(){
   const settingsHtml = !state.showSettings ? "" : `
     <div class="settings">
       <div class="set-row"><span class="set-label">Desks</span><div class="set-body">
-        <div class="chips">
-          ${BUILTIN_ORDER.map(k=>{ const off = state.profile.desks.disabled.includes(k);
-            return `<button class="chip ${off?"off":""}" data-toggle="${k}" style="border-color:color-mix(in srgb, ${CATS[k].accent} 45%, var(--line))">${off?"○ ":"● "}${CATS[k].label}</button>`; }).join("")}
-          ${(state.profile.desks.custom||[]).map(d=>`<button class="chip" data-remove="${esc(d.id)}" style="border-color:color-mix(in srgb, ${cat(d.id).accent} 45%, var(--line))" title="Remove desk">● ${esc(d.label)} ✕</button>`).join("")}
-        </div>
-        <div class="hint">Tap a desk to switch it on/off. Tap a custom desk to remove it. Changes rebuild your briefing.</div>
+        ${BUILTIN_ORDER.map(k=>deskRowHtml(k, true)).join("")}
+        ${(state.profile.desks.custom||[]).map(d=>deskRowHtml(d.id, false)).join("")}
+        <div class="hint">Each desk shows its personality and how it’s currently leaning, based on what you swipe. Toggle a desk on/off or remove a custom one — changes rebuild your briefing.</div>
         ${state.showAddDesk ? `
           <div class="dform">
             <input id="d-label" maxlength="40" placeholder="Desk name (e.g. Formula 1, AI research, Cycling)" />
@@ -445,6 +471,28 @@ function deskReport(report){
       <span class="diag-stat" style="color:${ok?"var(--text)":"var(--down)"}">${r?(ok?r.n+" stories":esc(r.status)):"—"}</span></div>`;
   }).join("");
   return `<div class="diag"><div class="diag-h">Desk report</div>${rows}</div>`;
+}
+
+// A settings row for one desk: name, personality, voice, and how it's currently leaning.
+function deskRowHtml(id, builtin){
+  const info = cat(id);
+  const off = (state.profile.desks.disabled||[]).includes(id);
+  const cd = customById(id);
+  const persona = builtin ? CATS[id].persona : info.persona;
+  const voice = builtin ? CATS[id].voice : ((cd && (cd.voice || cd.topic)) || "Your custom desk.");
+  const lean = deskLean(id);
+  return `<div class="desk ${off?'off':''}">
+    <div class="desk-h">
+      <span class="desk-dot" style="background:${info.accent}"></span>
+      <span class="desk-name">${esc(info.label)}</span>
+      <span class="desk-persona">${esc(persona)}</span>
+      ${builtin
+        ? `<button class="desk-toggle" data-toggle="${esc(id)}">${off?'Off':'On'}</button>`
+        : `<button class="desk-rm" style="margin-left:auto" data-remove="${esc(id)}">Remove</button>`}
+    </div>
+    <div class="desk-voice">${esc(voice)}</div>
+    <div class="desk-lean"><span style="color:${info.accent}">▸ ${esc(lean.head)}</span>${lean.detail?` · ${esc(lean.detail)}`:''}</div>
+  </div>`;
 }
 
 // ---- event wiring (incl. swipe gestures) ---------------------------------
