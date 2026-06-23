@@ -1,0 +1,309 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>The Wire — Jack's edition</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700;12..96,800&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@500;700&display=swap');
+
+:root{
+  --ink:#14161B; --panel:#1B1E26; --panel2:#222732; --line:#2E333F;
+  --text:#ECE7DB; --muted:#969BA8; --faint:#6A6F7C;
+  --amber:#F2A93B; --red:#E23B4C; --up:#46C06A; --down:#F0563A;
+  --violet:#9B8CFF; --sky:#5BB8E8; --green:#5FBE7E; --teal:#2FC8C8;
+}
+*{ box-sizing:border-box; }
+body{
+  margin:0; background:radial-gradient(120% 80% at 50% -10%, rgba(242,169,59,.10), transparent 55%), var(--ink);
+  color:var(--text); font-family:'Inter',system-ui,sans-serif; -webkit-font-smoothing:antialiased; padding-bottom:64px;
+}
+a{ color:inherit; text-decoration:none; }
+
+.mast{ display:flex; justify-content:space-between; align-items:flex-end; gap:16px; padding:22px 20px 14px; max-width:760px; margin:0 auto; }
+.eyebrow{ font-family:'JetBrains Mono',monospace; font-size:10px; letter-spacing:.26em; text-transform:uppercase; color:var(--amber); margin-bottom:2px; }
+.title{ font-family:'Bricolage Grotesque',sans-serif; font-weight:800; font-size:40px; line-height:.9; letter-spacing:-.02em; margin:0; }
+.mast-r{ text-align:right; }
+.date{ font-family:'JetBrains Mono',monospace; font-size:11px; color:var(--muted); margin-bottom:8px; }
+.mast-btns{ display:flex; gap:8px; justify-content:flex-end; }
+.icbtn{ width:34px; height:34px; border-radius:9px; border:1px solid var(--line); background:var(--panel); color:var(--text); cursor:pointer; font-size:15px; }
+.icbtn:hover{ border-color:var(--amber); }
+.refresh{ background:var(--amber); color:#1a1206; border:none; border-radius:9px; padding:0 16px; height:34px; font-weight:600; font-size:13px; cursor:pointer; font-family:'Inter',sans-serif; }
+.refresh:hover{ filter:brightness(1.06); }
+.refresh:disabled{ opacity:.55; cursor:default; }
+
+.ticker{ border-top:1px solid var(--line); border-bottom:1px solid var(--line); background:rgba(0,0,0,.25); overflow:hidden; }
+.ticker-track{ display:inline-flex; white-space:nowrap; padding:9px 0; animation:scroll 40s linear infinite; }
+.tok{ display:inline-flex; align-items:center; gap:8px; padding:0 22px; font-family:'JetBrains Mono',monospace; font-size:12px; }
+.tok-dot{ width:6px; height:6px; border-radius:50%; display:inline-block; }
+@keyframes scroll{ from{transform:translateX(0)} to{transform:translateX(-50%)} }
+@media (prefers-reduced-motion:reduce){ .ticker-track{ animation:none; } .ticker{ overflow-x:auto; } }
+
+.settings{ max-width:760px; margin:10px auto 0; padding:14px 20px; background:var(--panel); border:1px solid var(--line); border-radius:14px; }
+.set-row{ display:flex; gap:14px; align-items:flex-start; padding:8px 0; }
+.set-row + .set-row{ border-top:1px solid var(--line); }
+.set-label{ font-family:'JetBrains Mono',monospace; font-size:10px; letter-spacing:.16em; text-transform:uppercase; color:var(--muted); min-width:96px; padding-top:6px; }
+.set-empty{ color:var(--faint); font-size:13px; padding-top:5px; }
+.chips{ display:flex; flex-wrap:wrap; gap:7px; }
+.chip{ border:1px solid var(--line); background:var(--panel2); color:var(--text); border-radius:999px; padding:5px 11px; font-size:12.5px; cursor:pointer; font-family:'Inter',sans-serif; }
+.chip.off{ opacity:.45; }
+.chip.muted{ color:var(--muted); }
+.chip:hover{ filter:brightness(1.12); }
+
+.hero{ max-width:760px; margin:0 auto; padding:26px 20px 8px; }
+.hello{ font-family:'Bricolage Grotesque',sans-serif; font-weight:700; font-size:30px; margin:0 0 6px; letter-spacing:-.015em; }
+.sum{ margin:0; color:var(--muted); font-size:14.5px; }
+
+.filters{ position:sticky; top:0; z-index:5; display:flex; gap:8px; overflow-x:auto; max-width:760px; margin:14px auto 0; padding:12px 20px; background:linear-gradient(var(--ink), rgba(20,22,27,.86)); backdrop-filter:blur(6px); }
+.fil{ flex:0 0 auto; border:1px solid var(--line); background:var(--panel); color:var(--muted); border-radius:999px; padding:7px 13px; font-size:13px; cursor:pointer; font-family:'Inter',sans-serif; display:flex; align-items:center; gap:7px; }
+.fil.on{ color:#15171b; font-weight:600; }
+.fil .cnt{ font-family:'JetBrains Mono',monospace; font-size:11px; opacity:.8; }
+
+.feed{ max-width:760px; margin:8px auto 0; padding:6px 20px; display:flex; flex-direction:column; gap:12px; }
+.card{ background:var(--panel); border:1px solid var(--line); border-left:3px solid var(--ac); border-radius:13px; padding:15px 16px; }
+.card-top{ display:flex; align-items:center; gap:10px; margin-bottom:8px; }
+.cat{ font-family:'JetBrains Mono',monospace; font-size:10.5px; letter-spacing:.14em; text-transform:uppercase; font-weight:700; }
+.persona{ font-family:'JetBrains Mono',monospace; font-size:10px; color:var(--faint); letter-spacing:.04em; }
+.down{ margin-left:auto; background:transparent; border:none; color:var(--faint); font-size:11.5px; cursor:pointer; font-family:'Inter',sans-serif; padding:2px 4px; }
+.down:hover{ color:var(--down); }
+.h{ font-family:'Bricolage Grotesque',sans-serif; font-weight:700; font-size:18px; line-height:1.22; margin:0 0 7px; letter-spacing:-.01em; }
+.h a:hover{ color:var(--amber); }
+.p{ margin:0 0 9px; font-size:14px; line-height:1.5; color:#cfcabd; }
+.why{ margin:0 0 10px; font-size:13px; line-height:1.45; color:var(--muted); border-top:1px dashed var(--line); padding-top:9px; }
+.why span{ display:block; font-family:'JetBrains Mono',monospace; font-size:9.5px; letter-spacing:.16em; text-transform:uppercase; color:var(--amber); margin-bottom:3px; }
+.card-foot{ display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+.type{ font-size:11px; color:var(--muted); border:1px solid var(--line); border-radius:6px; padding:1px 7px; }
+.move{ font-family:'JetBrains Mono',monospace; font-size:12px; font-weight:700; }
+.src{ font-family:'JetBrains Mono',monospace; font-size:10.5px; color:var(--faint); }
+
+.skeletons{ display:flex; flex-direction:column; gap:12px; }
+.sk{ height:104px; border-radius:13px; border:1px solid var(--line); background:linear-gradient(100deg, var(--panel) 30%, var(--panel2) 50%, var(--panel) 70%); background-size:200% 100%; animation:sheen 1.4s ease-in-out infinite; }
+@keyframes sheen{ from{background-position:200% 0} to{background-position:-200% 0} }
+.empty{ text-align:center; padding:34px 16px; }
+.empty-h{ font-family:'Bricolage Grotesque',sans-serif; font-weight:700; font-size:17px; margin-bottom:8px; }
+.empty-p{ color:var(--muted); font-size:13.5px; max-width:420px; margin:0 auto 14px; line-height:1.5; }
+
+.diag{ max-width:340px; margin:14px auto 0; text-align:left; background:var(--panel); border:1px solid var(--line); border-radius:11px; padding:12px 14px; }
+.diag-h{ font-family:'JetBrains Mono',monospace; font-size:10px; letter-spacing:.16em; text-transform:uppercase; color:var(--muted); margin-bottom:9px; }
+.diag-row{ display:flex; align-items:center; gap:9px; padding:4px 0; font-size:13px; }
+.diag-dot{ width:7px; height:7px; border-radius:50%; flex:0 0 auto; }
+.diag-name{ flex:1; }
+.diag-stat{ font-family:'JetBrains Mono',monospace; font-size:11.5px; }
+
+.foot{ max-width:760px; margin:28px auto 0; padding:0 20px; text-align:center; font-size:11.5px; color:var(--faint); line-height:1.6; }
+.toast{ position:fixed; left:50%; bottom:20px; transform:translateX(-50%); background:var(--panel2); border:1px solid var(--line); border-radius:11px; padding:10px 14px; display:flex; align-items:center; gap:14px; font-size:13px; box-shadow:0 10px 30px rgba(0,0,0,.4); z-index:20; }
+.toast button{ background:transparent; border:none; color:var(--amber); font-weight:600; cursor:pointer; font-size:13px; font-family:'Inter',sans-serif; }
+@media (max-width:520px){ .title{ font-size:32px; } .hello{ font-size:25px; } .mast{ align-items:flex-start; } }
+</style>
+</head>
+<body>
+<div id="app"></div>
+
+<script>
+const CATS = {
+  liverpool:    { label:"Liverpool",     accent:"var(--red)",    persona:"The Campaigner · ENFP" },
+  worcester:    { label:"Worcester & UK", accent:"var(--green)",  persona:"The Consul · ESFJ" },
+  gaming:       { label:"Gaming",         accent:"var(--violet)", persona:"The Debater · ENTP" },
+  ev:           { label:"EV & Battery",   accent:"var(--teal)",   persona:"The Showman · ESTP" },
+  markets:      { label:"Markets",        accent:"var(--amber)",  persona:"The Architect · INTJ" },
+  world:        { label:"World",          accent:"var(--sky)",    persona:"The Advocate · INFJ" },
+};
+const CAT_ORDER = ["liverpool","worcester","gaming","ev","markets","world"];
+const PREFS = "jackwire:web:prefs";
+
+// ---- local prefs (downvote-to-mute lives in the browser) ----
+function loadPrefs(){ try{ return JSON.parse(localStorage.getItem(PREFS)) || {muted:[], mutedCats:[]}; }catch(_){ return {muted:[], mutedCats:[]}; } }
+function savePrefs(p){ try{ localStorage.setItem(PREFS, JSON.stringify(p)); }catch(_){} }
+
+const state = {
+  data: null, error: null, loading: true, filter: "all",
+  showSettings: false, toast: null,
+  prefs: loadPrefs(),
+};
+
+const esc = s => String(s==null?"":s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const longDate = () => new Date().toLocaleDateString("en-GB",{weekday:"long",day:"numeric",month:"long",year:"numeric"});
+
+async function load(force){
+  state.loading = true; state.error = null; render();
+  try{
+    const res = force
+      ? await fetch("/api/refresh", { method:"POST" })
+      : await fetch("/api/today");
+    const data = await res.json();
+    if (data.error) throw new Error(data.detail || data.error);
+    state.data = data;
+  }catch(e){
+    state.error = String(e.message || e);
+  }finally{
+    state.loading = false; render();
+  }
+}
+
+function muteType(t){
+  if(state.prefs.muted.includes(t)) return;
+  state.prefs.muted.push(t); savePrefs(state.prefs);
+  state.toast = { msg:`Muted “${t}”`, type:t }; render();
+  clearTimeout(window.__tt); window.__tt = setTimeout(()=>{ state.toast=null; render(); }, 4200);
+}
+function restoreType(t){
+  state.prefs.muted = state.prefs.muted.filter(x=>x!==t); savePrefs(state.prefs);
+  state.toast = null; render();
+}
+function toggleCat(c){
+  const m = state.prefs.mutedCats;
+  state.prefs.mutedCats = m.includes(c) ? m.filter(x=>x!==c) : [...m, c];
+  savePrefs(state.prefs); render();
+}
+
+function visibleItems(){
+  if(!state.data) return [];
+  const {muted, mutedCats} = state.prefs;
+  return state.data.items.filter(i =>
+    !muted.includes(i.contentType) && !mutedCats.includes(i.category) &&
+    (state.filter === "all" || i.category === state.filter));
+}
+function counts(){
+  const c = {};
+  CAT_ORDER.forEach(cat => {
+    c[cat] = !state.data ? 0 : state.data.items.filter(i =>
+      i.category===cat && !state.prefs.muted.includes(i.contentType) && !state.prefs.mutedCats.includes(cat)).length;
+  });
+  return c;
+}
+
+function render(){
+  const app = document.getElementById("app");
+  const c = counts();
+  const total = CAT_ORDER.reduce((n,k)=>n+c[k],0);
+  const fixture = state.data && state.data.fixture;
+  const report = state.data && state.data.report;
+
+  // ticker tokens
+  let toks = [];
+  if(state.data){
+    state.data.items.filter(i=>i.category==="markets").forEach(m=>{
+      const arrow = m.direction==="up"?"▲":m.direction==="down"?"▼":"■";
+      const col = m.direction==="up"?"var(--up)":m.direction==="down"?"var(--down)":"var(--muted)";
+      toks.push({t:`${m.title} ${arrow} ${m.changePct||""}`.trim(), c:col});
+    });
+    if(fixture) toks.push({t:`LFC ◦ ${fixture}`, c:"var(--red)"});
+    CAT_ORDER.filter(k=>!state.prefs.mutedCats.includes(k)).forEach(k=> toks.push({t:`${c[k]} ${CATS[k].label}`, c:CATS[k].accent}));
+  }
+  if(!toks.length) toks.push({t:"Loading the wire…", c:"var(--muted)"});
+  const tickerHtml = [...toks,...toks].map(tk=>`<span class="tok"><span class="tok-dot" style="background:${tk.c}"></span><span style="color:${tk.c}">${esc(tk.t)}</span></span>`).join("");
+
+  const sumLine = state.loading ? "Loading your briefing…"
+    : total ? CAT_ORDER.filter(k=>!state.prefs.mutedCats.includes(k)&&c[k]).map(k=>`${c[k]} ${CATS[k].label.toLowerCase()}`).join(" · ")
+    : "Nothing in the tray yet.";
+
+  const filterBtns = [`<button class="fil ${state.filter==="all"?"on":""}" style="${state.filter==="all"?"background:var(--amber);border-color:var(--amber)":""}" data-filter="all">All <span class="cnt">${total}</span></button>`]
+    .concat(CAT_ORDER.filter(k=>!state.prefs.mutedCats.includes(k)).map(k=>{
+      const on = state.filter===k;
+      return `<button class="fil ${on?"on":""}" style="${on?`background:${CATS[k].accent};border-color:${CATS[k].accent}`:""}" data-filter="${k}">${CATS[k].label} <span class="cnt">${c[k]}</span></button>`;
+    })).join("");
+
+  const items = visibleItems();
+  let feedHtml = "";
+  if(state.error){
+    feedHtml = `<div class="empty"><div class="empty-h">Couldn’t load the briefing.</div>
+      <p class="empty-p">${esc(state.error)}<br>If a desk timed out, hit refresh — it usually lands on the next go.</p>
+      ${deskReport(report)}
+      <button class="refresh" id="retry" style="margin-top:14px">Try again</button></div>`;
+  } else if(state.loading && (!state.data || !state.data.items.length)){
+    feedHtml = `<div class="skeletons">${"<div class='sk'></div>".repeat(4)}</div>`;
+  } else if(items.length===0 && state.data && state.data.items.length){
+    feedHtml = `<div class="empty"><div class="empty-h">Nothing here under this filter.</div>
+      <p class="empty-p">Either everything’s muted or this desk came back quiet. Try “All”, or unmute types in settings.</p></div>`;
+  } else {
+    feedHtml = items.map(it=>{
+      const cat = CATS[it.category]; const ac = cat.accent;
+      const dirCol = it.direction==="up"?"var(--up)":it.direction==="down"?"var(--down)":"var(--muted)";
+      const arrow = it.direction==="up"?"▲":it.direction==="down"?"▼":"■";
+      const titleHtml = it.url ? `<a href="${esc(it.url)}" target="_blank" rel="noreferrer">${esc(it.title)}</a>` : esc(it.title);
+      return `<article class="card" style="--ac:${ac}">
+        <div class="card-top">
+          <span class="cat" style="color:${ac}">${esc(cat.label)}</span>
+          <span class="persona">${esc(cat.persona)}</span>
+          <button class="down" data-mute="${esc(it.contentType)}" title="Mute “${esc(it.contentType)}”">▾ less like this</button>
+        </div>
+        <h3 class="h">${titleHtml}</h3>
+        ${it.summary?`<p class="p">${esc(it.summary)}</p>`:""}
+        ${it.why?`<p class="why"><span>Why it matters</span>${esc(it.why)}</p>`:""}
+        <div class="card-foot">
+          <span class="type">${esc(it.contentType)}</span>
+          ${it.changePct?`<span class="move" style="color:${dirCol}">${arrow} ${esc(it.changePct)}</span>`:""}
+          ${it.source?`<span class="src">${esc(it.source)}</span>`:""}
+        </div>
+      </article>`;
+    }).join("");
+
+    // partial-failure note
+    if(report && CAT_ORDER.filter(k=>!state.prefs.mutedCats.includes(k)).some(k=>report[k] && report[k].status!=="ok")){
+      feedHtml += `<details style="background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:10px 14px">
+        <summary style="cursor:pointer;font-size:12.5px;color:var(--muted)">Some desks came back quiet — see report</summary>
+        ${deskReport(report)}</details>`;
+    }
+  }
+
+  const settingsHtml = !state.showSettings ? "" : `
+    <div class="settings">
+      <div class="set-row"><span class="set-label">Desks</span><div class="chips">
+        ${CAT_ORDER.map(k=>`<button class="chip ${state.prefs.mutedCats.includes(k)?"off":""}" data-cat="${k}" style="border-color:color-mix(in srgb, ${CATS[k].accent} 45%, var(--line))">${state.prefs.mutedCats.includes(k)?"○ ":"● "}${CATS[k].label}</button>`).join("")}
+      </div></div>
+      <div class="set-row"><span class="set-label">Muted types</span><div class="chips">
+        ${state.prefs.muted.length===0?`<span class="set-empty">None muted. Downvote a story to mute its type.</span>`:""}
+        ${state.prefs.muted.map(t=>`<button class="chip muted" data-restore="${esc(t)}">${esc(t)} ✕</button>`).join("")}
+      </div></div>
+    </div>`;
+
+  const pulled = state.data ? ` · last pulled ${esc(state.data.date)}` : "";
+
+  app.innerHTML = `
+    <header class="mast">
+      <div class="mast-l"><div class="eyebrow">Personal edition · UK</div><h1 class="title">THE WIRE</h1></div>
+      <div class="mast-r"><div class="date">${longDate()}</div>
+        <div class="mast-btns">
+          <button class="icbtn" id="cog" aria-label="Settings">⚙</button>
+          <button class="refresh" id="refresh" ${state.loading?"disabled":""}>${state.loading?"Pulling…":"Refresh"}</button>
+        </div></div>
+    </header>
+    <div class="ticker" aria-hidden="true"><div class="ticker-track">${tickerHtml}</div></div>
+    ${settingsHtml}
+    <section class="hero"><h2 class="hello">Good morning, Jack.</h2><p class="sum">${esc(sumLine)}</p></section>
+    <nav class="filters">${filterBtns}</nav>
+    <main class="feed">${feedHtml}</main>
+    <footer class="foot">British English, £, no ads, no comment columns. Six desks, each with its own voice. Refreshed automatically every morning.${pulled}</footer>
+    ${state.toast?`<div class="toast"><span>${esc(state.toast.msg)}</span><button id="undo">Undo</button></div>`:""}
+  `;
+  wire();
+}
+
+function deskReport(report){
+  if(!report) return "";
+  const rows = CAT_ORDER.filter(k=>!state.prefs.mutedCats.includes(k)).map(k=>{
+    const r = report[k]; const ok = r && r.status==="ok";
+    return `<div class="diag-row"><span class="diag-dot" style="background:${ok?CATS[k].accent:"var(--faint)"}"></span>
+      <span class="diag-name">${CATS[k].label}</span>
+      <span class="diag-stat" style="color:${ok?"var(--text)":"var(--down)"}">${r?(ok?r.n+" stories":esc(r.status)):"—"}</span></div>`;
+  }).join("");
+  return `<div class="diag"><div class="diag-h">Desk report</div>${rows}</div>`;
+}
+
+function wire(){
+  const $ = s => document.getElementById(s);
+  $("cog") && ($("cog").onclick = ()=>{ state.showSettings=!state.showSettings; render(); });
+  $("refresh") && ($("refresh").onclick = ()=> load(true));
+  $("retry") && ($("retry").onclick = ()=> load(true));
+  $("undo") && ($("undo").onclick = ()=> restoreType(state.toast.type));
+  document.querySelectorAll("[data-filter]").forEach(b=> b.onclick = ()=>{ state.filter=b.dataset.filter; render(); });
+  document.querySelectorAll("[data-mute]").forEach(b=> b.onclick = ()=> muteType(b.dataset.mute));
+  document.querySelectorAll("[data-cat]").forEach(b=> b.onclick = ()=> toggleCat(b.dataset.cat));
+  document.querySelectorAll("[data-restore]").forEach(b=> b.onclick = ()=> restoreType(b.dataset.restore));
+}
+
+render();
+load(false);
+</script>
+</body>
+</html>

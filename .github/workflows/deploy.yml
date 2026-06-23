@@ -1,0 +1,50 @@
+name: Deploy (Cloudflare Workers)
+
+# Deploys "The Wire — Jack's edition" to Cloudflare Workers.
+#
+# Required repository secrets (Settings → Secrets and variables → Actions):
+#   CLOUDFLARE_API_TOKEN  – a Cloudflare API token with the "Edit Cloudflare Workers"
+#                           template permissions (Workers Scripts, Workers KV, Workers Routes).
+#   ANTHROPIC_API_KEY     – your Anthropic API key (web search must be enabled for the org).
+#
+# The ANTHROPIC_API_KEY is pushed to the Worker as an encrypted secret on every deploy,
+# so it never lives in the code or in wrangler.toml.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "public/**"
+      - "wrangler.toml"
+      - "package.json"
+      - ".github/workflows/deploy.yml"
+  workflow_dispatch: {}
+
+concurrency:
+  group: deploy-cloudflare
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Push ANTHROPIC_API_KEY as a Worker secret
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: printf '%s' "$ANTHROPIC_API_KEY" | npx wrangler secret put ANTHROPIC_API_KEY
+
+      - name: Deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: npx wrangler deploy
