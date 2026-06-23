@@ -474,6 +474,43 @@ function ingestAuthed(env, request) {
   return ingestEnabled(env) && timingSafeEqual(key, env.INGEST_SECRET);
 }
 
+// ---- on-demand refresh: fire the shared-feed routine's API trigger --------
+// Claude Code Routines expose a per-routine /fire endpoint (bearer-token auth).
+// The shared feed's "Refresh" asks the routine to re-run (subscription-billed,
+// its own web search) and POST a fresh briefing to /api/ingest — instead of a
+// metered Anthropic API build. Dormant until ROUTINE_FIRE_URL + the secret
+// ROUTINE_FIRE_TOKEN are set, so deploys stay safe. See routines/SETUP.md.
+const routineFireConfigured = env => !!(env.ROUTINE_FIRE_URL && env.ROUTINE_FIRE_TOKEN);
+
+async function fireRoutine(env, reason) {
+  if (!routineFireConfigured(env)) return { ok: false, reason: "not configured" };
+  // Protect the routine's daily run cap: at most one fire per window.
+  const minInterval = Number(env.ROUTINE_FIRE_MIN_SECONDS || 900);
+  const nowSec = Math.floor(Date.now() / 1000);
+  if (env.WIRE_KV) {
+    const last = Number(await env.WIRE_KV.get("routine:last_fire")) || 0;
+    const since = nowSec - last;
+    if (last && since < minInterval) return { ok: true, throttled: true, retryInSec: minInterval - since };
+  }
+  let res;
+  try {
+    res = await fetch(env.ROUTINE_FIRE_URL, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${env.ROUTINE_FIRE_TOKEN}`,
+        "anthropic-beta": "experimental-cc-routine-2026-04-01",
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ text: `On-demand shared-feed refresh (${reason}) at ${new Date().toISOString()}. Re-run the briefing and POST it to /api/ingest.` }),
+    });
+  } catch (e) { return { ok: false, error: "network error" }; }
+  let data = {}; try { data = await res.json(); } catch (_) {}
+  if (!res.ok) return { ok: false, error: (data && data.error && data.error.message) || `HTTP ${res.status}` };
+  if (env.WIRE_KV) await env.WIRE_KV.put("routine:last_fire", String(nowSec), { expirationTtl: 86400 });
+  return { ok: true, fired: true, session: data.claude_code_session_url || null };
+}
+
 // Trust the desk id supplied per item; assign our own ids and clamp lengths.
 function normalizeIngest(items) {
   return (items || [])
@@ -778,6 +815,15 @@ export default {
       try {
         let body = {}; try { body = await request.json(); } catch (_) {}
         const t = await resolveTarget(env, sUid || cleanUid(body.userId) || queryUid);
+        // The shared feed is owned by the Claude Routine — refresh fires the
+        // routine's API trigger (subscription-billed) instead of a metered
+        // Anthropic API build. Personalised feeds keep the API build path.
+        const useRoutine = String(env.FEED_SOURCE || "").toLowerCase() === "routine";
+        if (t.key === "shared" && useRoutine && routineFireConfigured(env)) {
+          const refresh = await fireRoutine(env, "manual refresh");
+          const cached = await readJSON(env, t.writeKeys.latest);
+          return json({ ...(cached || generatingShell()), generating: true, refresh });
+        }
         ctx.waitUntil(startBuild(env, t.key, t.profile, t.writeKeys));
         const cached = await readJSON(env, t.writeKeys.latest);
         return json(cached && cached.items?.length ? { ...cached, generating: true } : generatingShell());

@@ -45,3 +45,11 @@ FEED_SOURCE = "routine"
 #
 # /api/ingest stays dormant until the encrypted secret INGEST_SECRET is set
 # (wrangler secret put INGEST_SECRET — NOT committed here).
+
+# On-demand "Refresh" for the shared feed. When set, the shared-feed refresh
+# fires the routine's own API trigger (subscription-billed) instead of a metered
+# Anthropic API build. Get the URL + token from the routine's Edit page →
+# "Add another trigger" → API (claude.ai/code/routines). The token is a secret:
+#   wrangler secret put ROUTINE_FIRE_TOKEN
+# ROUTINE_FIRE_URL = "https://api.anthropic.com/v1/claude_code/routines/<routine_id>/fire"
+# ROUTINE_FIRE_MIN_SECONDS = "900"   # min seconds between fires (protect the daily run cap)
