@@ -414,11 +414,146 @@ async function resolveTarget(env, u) {
   };
 }
 
+// ---- Sign in with Apple (optional; enabled only when configured) ---------
+// Pure sign-in: we verify the identity token Apple returns in the form_post,
+// so no .p8 / client-secret signing is needed — just the Services ID (aud)
+// and a session secret. Profiles get keyed by the stable Apple `sub`.
+const appleEnabled = env => !!(env.APPLE_CLIENT_ID && env.SESSION_SECRET);
+const appleRedirect = env => env.APPLE_REDIRECT_URI || "https://desk.databased.business/auth/apple/callback";
+
+function b64urlToBytes(s) {
+  s = String(s).replace(/-/g, "+").replace(/_/g, "/");
+  const pad = s.length % 4; if (pad) s += "=".repeat(4 - pad);
+  const bin = atob(s); const u = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i);
+  return u;
+}
+function bytesToB64url(u) {
+  let bin = ""; for (const b of u) bin += String.fromCharCode(b);
+  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+const strToB64url = s => bytesToB64url(new TextEncoder().encode(s));
+const b64urlToStr = s => new TextDecoder().decode(b64urlToBytes(s));
+const randHex = (n = 16) => { const u = new Uint8Array(n); crypto.getRandomValues(u); return [...u].map(b => b.toString(16).padStart(2, "0")).join(""); };
+
+function getCookie(request, name) {
+  const c = request.headers.get("Cookie") || "";
+  for (const part of c.split(/;\s*/)) { const i = part.indexOf("="); if (i > 0 && part.slice(0, i) === name) return decodeURIComponent(part.slice(i + 1)); }
+  return null;
+}
+
+// Our own signed token (HMAC-SHA256) for the session cookie and the auth-flow cookie.
+async function hmacKey(env) {
+  return crypto.subtle.importKey("raw", new TextEncoder().encode(env.SESSION_SECRET), { name: "HMAC", hash: "SHA-256" }, false, ["sign", "verify"]);
+}
+async function signToken(env, obj) {
+  const body = strToB64url(JSON.stringify(obj));
+  const sig = new Uint8Array(await crypto.subtle.sign("HMAC", await hmacKey(env), new TextEncoder().encode(body)));
+  return body + "." + bytesToB64url(sig);
+}
+async function verifyToken(env, token) {
+  if (!env.SESSION_SECRET || !token || token.indexOf(".") < 0) return null;
+  const [body, sig] = token.split(".");
+  let ok = false;
+  try { ok = await crypto.subtle.verify("HMAC", await hmacKey(env), b64urlToBytes(sig), new TextEncoder().encode(body)); } catch (_) { return null; }
+  if (!ok) return null;
+  let obj; try { obj = JSON.parse(b64urlToStr(body)); } catch (_) { return null; }
+  if (obj.exp && Date.now() / 1000 > obj.exp) return null;
+  return obj;
+}
+
+// Verify Apple's RS256 identity token against Apple's published JWKS.
+let _appleKeys = null, _appleKeysAt = 0;
+async function appleKeys() {
+  if (_appleKeys && Date.now() - _appleKeysAt < 3600_000) return _appleKeys;
+  const res = await fetch("https://appleid.apple.com/auth/keys");
+  const data = await res.json();
+  _appleKeys = data.keys || []; _appleKeysAt = Date.now();
+  return _appleKeys;
+}
+async function verifyAppleIdToken(env, idToken, expectedNonce) {
+  if (!idToken || typeof idToken !== "string") return null;
+  const parts = idToken.split("."); if (parts.length !== 3) return null;
+  let header, payload;
+  try { header = JSON.parse(b64urlToStr(parts[0])); payload = JSON.parse(b64urlToStr(parts[1])); } catch (_) { return null; }
+  const jwk = (await appleKeys()).find(k => k.kid === header.kid);
+  if (!jwk) return null;
+  let key, ok = false;
+  try {
+    key = await crypto.subtle.importKey("jwk", { kty: jwk.kty, n: jwk.n, e: jwk.e, alg: "RS256", ext: true }, { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, false, ["verify"]);
+    ok = await crypto.subtle.verify({ name: "RSASSA-PKCS1-v1_5" }, key, b64urlToBytes(parts[2]), new TextEncoder().encode(parts[0] + "." + parts[1]));
+  } catch (_) { return null; }
+  if (!ok) return null;
+  if (payload.iss !== "https://appleid.apple.com") return null;
+  if (payload.aud !== env.APPLE_CLIENT_ID) return null;
+  if (payload.exp && Date.now() / 1000 > payload.exp) return null;
+  if (expectedNonce && payload.nonce !== expectedNonce) return null;
+  return payload;
+}
+
+// The signed-in user's id (from the session cookie), if any.
+async function sessionUid(env, request) {
+  const s = await verifyToken(env, getCookie(request, "sess"));
+  return s && s.uid ? s.uid : null;
+}
+
 // ---- Worker entry points -------------------------------------------------
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
-    const headerUid = cleanUid(url.searchParams.get("u") || request.headers.get("x-user-id"));
+    const queryUid = cleanUid(url.searchParams.get("u") || request.headers.get("x-user-id"));
+    // A signed-in user's id (from the session cookie) overrides the anonymous one.
+    const sUid = await sessionUid(env, request);
+    const headerUid = sUid || queryUid;
+
+    // ---- Sign in with Apple endpoints (no-ops unless configured) ----------
+    if (url.pathname === "/api/me") {
+      const s = await verifyToken(env, getCookie(request, "sess"));
+      return json({ appleEnabled: appleEnabled(env), signedIn: !!s, email: (s && s.email) || null });
+    }
+    if (url.pathname === "/api/profile" && request.method === "GET") {
+      const u = headerUid;
+      return json({ profile: u ? await readJSON(env, profileKey(u)) : null });
+    }
+    if (url.pathname === "/auth/apple/login") {
+      if (!appleEnabled(env)) return new Response("Sign-in not configured", { status: 404 });
+      const u = cleanUid(url.searchParams.get("u")) || "";
+      const state = randHex(), nonce = randHex();
+      const flow = await signToken(env, { state, nonce, u, exp: Math.floor(Date.now() / 1000) + 600 });
+      const p = new URLSearchParams({
+        response_type: "code id_token", response_mode: "form_post",
+        client_id: env.APPLE_CLIENT_ID, redirect_uri: appleRedirect(env),
+        scope: "name email", state, nonce,
+      });
+      const h = new Headers({ "Location": "https://appleid.apple.com/auth/authorize?" + p.toString() });
+      h.append("Set-Cookie", `aflow=${encodeURIComponent(flow)}; HttpOnly; Secure; SameSite=None; Path=/; Max-Age=600`);
+      return new Response(null, { status: 302, headers: h });
+    }
+    if (url.pathname === "/auth/apple/callback" && request.method === "POST") {
+      if (!appleEnabled(env)) return new Response("Sign-in not configured", { status: 404 });
+      let form; try { form = await request.formData(); } catch (_) { return new Response("Bad request", { status: 400 }); }
+      const flow = await verifyToken(env, getCookie(request, "aflow"));
+      if (!flow || flow.state !== form.get("state")) return new Response("Invalid sign-in state", { status: 400 });
+      const payload = await verifyAppleIdToken(env, form.get("id_token"), flow.nonce);
+      if (!payload || !payload.sub) return new Response("Invalid identity token", { status: 401 });
+      const appleUid = "apple:" + payload.sub;
+      // First sign-in: link the anonymous profile so swipes/desks carry over.
+      if (flow.u && env.WIRE_KV) {
+        const existing = await readJSON(env, profileKey(appleUid));
+        const anon = await readJSON(env, profileKey(flow.u));
+        if (!existing && anon) await env.WIRE_KV.put(profileKey(appleUid), JSON.stringify(anon));
+      }
+      const sess = await signToken(env, { uid: appleUid, email: payload.email || null, exp: Math.floor(Date.now() / 1000) + 60 * 60 * 24 * 90 });
+      const h = new Headers({ "Location": "/" });
+      h.append("Set-Cookie", `sess=${encodeURIComponent(sess)}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${60 * 60 * 24 * 90}`);
+      h.append("Set-Cookie", `aflow=; HttpOnly; Secure; SameSite=None; Path=/; Max-Age=0`);
+      return new Response(null, { status: 302, headers: h });
+    }
+    if (url.pathname === "/auth/apple/logout") {
+      const h = new Headers({ "Location": "/" });
+      h.append("Set-Cookie", `sess=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0`);
+      return new Response(null, { status: 302, headers: h });
+    }
 
     if (url.pathname === "/api/today") {
       try {
@@ -433,7 +568,7 @@ export default {
     if (url.pathname === "/api/refresh" && request.method === "POST") {
       try {
         let body = {}; try { body = await request.json(); } catch (_) {}
-        const t = await resolveTarget(env, cleanUid(body.userId) || headerUid);
+        const t = await resolveTarget(env, sUid || cleanUid(body.userId) || queryUid);
         ctx.waitUntil(startBuild(env, t.key, t.profile, t.writeKeys));
         const cached = await readJSON(env, t.writeKeys.latest);
         return json(cached && cached.items?.length ? { ...cached, generating: true } : generatingShell());
@@ -443,7 +578,7 @@ export default {
     if (url.pathname === "/api/profile" && (request.method === "PUT" || request.method === "POST")) {
       try {
         let body = {}; try { body = await request.json(); } catch (_) {}
-        const u = cleanUid(body.userId);
+        const u = sUid || cleanUid(body.userId);
         if (!u) return json({ error: "missing or invalid userId" }, 400);
         const profile = sanitizeProfile(body.profile);
         if (env.WIRE_KV) await env.WIRE_KV.put(profileKey(u), JSON.stringify(profile));

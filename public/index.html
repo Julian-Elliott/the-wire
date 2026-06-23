@@ -59,6 +59,8 @@ a{ color:inherit; text-decoration:none; }
 .linkbtn{ background:transparent; border:1px solid var(--line); color:var(--muted); border-radius:8px; padding:8px 13px; font-size:12.5px; cursor:pointer; font-family:'Inter',sans-serif; }
 .linkbtn:hover{ border-color:var(--amber); color:var(--text); }
 .hint{ color:var(--faint); font-size:11.5px; margin-top:2px; }
+.apple-btn{ display:inline-flex; align-items:center; gap:8px; margin-top:10px; background:#000; color:#fff; border:1px solid #000; border-radius:9px; padding:9px 16px; font-size:13px; font-weight:600; cursor:pointer; }
+.apple-btn::before{ content:""; } .apple-btn:hover{ filter:brightness(1.15); }
 
 .desk{ border:1px solid var(--line); border-radius:11px; padding:10px 12px; margin-bottom:8px; background:var(--panel2); }
 .desk.off{ opacity:.5; }
@@ -175,6 +177,7 @@ const state = {
   read: new Set(),
   seenBefore: (function(){ try{ return localStorage.getItem("jackwire:lastseen")||""; }catch(_){ return ""; } })(),
   onboard: (function(){ try{ return localStorage.getItem("jackwire:onboarded")!=="1"; }catch(_){ return true; } })(),
+  auth: { enabled:false, signedIn:false, email:null },
 };
 
 const esc = s => String(s==null?"":s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
@@ -257,6 +260,27 @@ async function putProfile(regenerate){
   try{
     await fetch("/api/profile", { method:"PUT", headers:{"content-type":"application/json"},
       body: JSON.stringify({ userId: state.uid, profile: profileForServer(), regenerate: !!regenerate }) });
+  }catch(_){}
+}
+
+// ---- account / sign-in --------------------------------------------------
+async function fetchMe(){
+  try{ const r = await fetch("/api/me"); const d = await r.json();
+    state.auth = { enabled: !!d.appleEnabled, signedIn: !!d.signedIn, email: d.email||null };
+  }catch(_){}
+}
+// Convert the server's profile shape ({desks:{enabled,custom}}) to the client's
+// ({desks:{disabled,custom}}) and adopt it — used so a signed-in profile syncs.
+function adoptServerProfile(sp){
+  if(!sp || !sp.desks) return;
+  const enabled = Array.isArray(sp.desks.enabled) ? sp.desks.enabled : null;
+  const disabled = enabled ? BUILTIN_ORDER.filter(id=>!enabled.includes(id)) : [];
+  state.profile = { desks:{ disabled, custom: Array.isArray(sp.desks.custom)?sp.desks.custom:[] }, weights: sp.weights||{} };
+  saveProfile();
+}
+async function loadServerProfile(){
+  try{ const r = await fetch("/api/profile?u="+encodeURIComponent(state.uid)); const d = await r.json();
+    if(d && d.profile) adoptServerProfile(d.profile);
   }catch(_){}
 }
 let _wt;
@@ -455,6 +479,13 @@ function render(){
         <div class="hint">Swipe a card right to mark it read, left for not-for-me. Your desks learn and the next pull is tailored to you.</div>
         <div class="row" style="margin-top:8px"><button class="linkbtn" id="reset-learn">Reset what I’ve learned</button></div>
       </div></div>
+      ${state.auth.enabled ? `<div class="set-row"><span class="set-label">Account</span><div class="set-body">
+        ${state.auth.signedIn
+          ? `<div class="hint">Signed in${state.auth.email?` as ${esc(state.auth.email)}`:""}. Your desks and learning sync across your devices.</div>
+             <div class="row" style="margin-top:8px"><button class="linkbtn" id="signout">Sign out</button></div>`
+          : `<div class="hint">Sign in to sync your desks and what you’ve taught your wire across devices.</div>
+             <a class="apple-btn" href="/auth/apple/login?u=${encodeURIComponent(state.uid)}"> Sign in with Apple</a>`}
+      </div></div>` : ""}
     </div>`;
 
   const pulled = state.data && state.data.date ? ` · last pulled ${esc(state.data.date)}` : "";
@@ -538,6 +569,7 @@ function wire(){
   $("d-cancel") && ($("d-cancel").onclick = ()=>{ state.showAddDesk=false; render(); });
   $("d-add") && ($("d-add").onclick = ()=> addCustomDesk(($("d-label")||{}).value, ($("d-topic")||{}).value, ($("d-voice")||{}).value));
   $("reset-learn") && ($("reset-learn").onclick = ()=>{ state.profile.weights={}; saveProfile(); putProfile(false); state.toast={msg:"Cleared learned preferences"}; clearTimeout(window.__tt); window.__tt=setTimeout(()=>{state.toast=null;render();},3000); render(); });
+  $("signout") && ($("signout").onclick = ()=>{ location.href="/auth/apple/logout"; });
 
   document.querySelectorAll("[data-filter]").forEach(b=> b.onclick = ()=>{ state.filter=b.dataset.filter; render(); });
   document.querySelectorAll("[data-mute]").forEach(b=> b.onclick = (e)=>{ e.stopPropagation(); muteType(b.dataset.mute); });
@@ -584,8 +616,14 @@ function wire(){
   });
 }
 
-render();
-load(false);
+async function init(){
+  render();
+  await fetchMe();
+  if(state.auth.signedIn) await loadServerProfile();  // adopt the synced profile
+  render();
+  load(false);
+}
+init();
 </script>
 </body>
 </html>
