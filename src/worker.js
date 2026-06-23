@@ -264,6 +264,28 @@ function londonDate() {
     timeZone: "Europe/London", year: "numeric", month: "2-digit", day: "2-digit",
   }).format(new Date());
 }
+function londonHour() {
+  try { return parseInt(new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/London", hour: "2-digit", hour12: false }).format(new Date()), 10) % 24; }
+  catch (_) { return new Date().getUTCHours(); }
+}
+const londonSlot = () => { const h = londonHour(); return h < 12 ? "morning" : h < 18 ? "afternoon" : "evening"; };
+
+// Merge fresh stories into today's running feed: dedupe, keep newest first, and
+// cap how many accumulate per desk over the day.
+const DAILY_CAP_PER_DESK = 9;
+const normTitle = t => String(t || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+const itemKey = it => (it.url && String(it.url).trim())
+  ? "u:" + String(it.url).trim().toLowerCase()
+  : "t:" + it.category + "|" + normTitle(it.title);
+function mergeItems(prior, fresh) {
+  const seen = new Set(); const out = [];
+  for (const it of fresh) { const k = itemKey(it); if (seen.has(k)) continue; seen.add(k); out.push(it); }
+  for (const it of prior) { const k = itemKey(it); if (seen.has(k)) continue; seen.add(k); out.push(it); }
+  const per = {}; const capped = [];
+  for (const it of out) { const n = per[it.category] = (per[it.category] || 0) + 1; if (n <= DAILY_CAP_PER_DESK) capped.push(it); }
+  capped.sort((a, b) => String(b.addedAt || "").localeCompare(String(a.addedAt || "")));
+  return capped;
+}
 const SHARED_KEY = "briefing:latest";
 const userBriefKey = u => `briefing:user:${u}`;
 const profileKey = u => `profile:${u}`;
@@ -321,9 +343,22 @@ async function buildBriefing(env, profile, writeKeys) {
     report[d.id] = { n: r.items.length, status: r.status, label: d.label, builtin: !!d.builtin };
     if (d.id === "liverpool") fixture = r.fixture;
   });
-  const items = interleave(byCat, order);
+  const stamp = new Date().toISOString();
+  const slot = londonSlot();
+  const fresh = interleave(byCat, order);
+  fresh.forEach(it => { it.addedAt = stamp; it.slot = slot; });
+
+  // Merge into today's running feed so afternoon/evening pulls ADD to the
+  // morning feed (newest first) instead of replacing it. New day → start clean.
+  let prior = [];
+  if (env.WIRE_KV && writeKeys) {
+    const existing = await readJSON(env, writeKeys.latest);
+    if (existing && existing.date === londonDate() && Array.isArray(existing.items)) prior = existing.items;
+  }
+  const items = mergeItems(prior, fresh);
+
   const payload = {
-    date: londonDate(), generatedAt: new Date().toISOString(),
+    date: londonDate(), generatedAt: stamp, slot,
     items, fixture, report,
     desks: desks.map(d => ({ id: d.id, label: d.label, builtin: !!d.builtin })),
   };

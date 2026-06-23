@@ -7,10 +7,13 @@ compatibility_date = "2026-06-01"
 directory = "./public"
 binding = "ASSETS"
 
-# Run the morning briefing once a day. Time is UTC.
-# "0 6 * * *"  = 06:00 UTC daily (07:00 UK in summer / 06:00 in winter).
+# Refresh the running feed three times a day (times are UTC). Each run merges
+# fresh stories into today's feed rather than replacing it.
+#   "0 6 * * *"  = 06:00 UTC (morning, ~07:00 UK summer)
+#   "0 12 * * *" = 12:00 UTC (afternoon, ~13:00 UK summer)
+#   "0 18 * * *" = 18:00 UTC (evening, ~19:00 UK summer)
 [triggers]
-crons = ["0 6 * * *"]
+crons = ["0 6 * * *", "0 12 * * *", "0 18 * * *"]
 
 # Workers KV stores the generated briefing (one shared copy).
 # Namespace "WIRE_KV" was created in the Cloudflare account; its id is below.
