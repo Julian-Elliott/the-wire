@@ -328,6 +328,10 @@ const SHARED_KEY = "briefing:latest";
 const userBriefKey = u => `briefing:user:${u}`;
 const profileKey = u => `profile:${u}`;
 const cleanUid = u => (typeof u === "string" && /^[A-Za-z0-9_-]{8,64}$/.test(u)) ? u : null;
+// Looser check for the trusted ingest path: also accepts the "apple:<sub>"
+// session id form (colons + dots) that cleanUid (anonymous ids only) rejects,
+// so a routine's personalised build routes back to a signed-in user's feed.
+const cleanUidLoose = u => (typeof u === "string" && /^[A-Za-z0-9_.:-]{8,96}$/.test(u)) ? u : null;
 
 function isCustomised(p) {
   if (!p || !p.desks) return false;
@@ -898,7 +902,8 @@ export default {
       try {
         // An optional userId routes the briefing into that user's personalised
         // feed (a routine fired by their refresh); without it, the shared feed.
-        const uid = cleanUid(body.userId);
+        // Loose check so signed-in "apple:<sub>" ids (colons/dots) route too.
+        const uid = cleanUidLoose(body.userId);
         let target = null;
         if (uid) {
           const profile = await readJSON(env, profileKey(uid));
