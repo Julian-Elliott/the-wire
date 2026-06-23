@@ -837,13 +837,18 @@ export default {
         // (e.g. web search disabled → empty desks). `generatedAt` is only set by
         // a real build; the generating shell leaves it null. Returning it lets
         // the client show the per-desk report instead of spinning forever.
-        const fresh = cached && cached.date === londonDate() && cached.generatedAt;
+        const useRoutine = String(env.FEED_SOURCE || "").toLowerCase() === "routine";
+        const hasItems = !!(cached && cached.items && cached.items.length);
+        // A completed build for today is normally fresh even with zero items.
+        // But in routine mode a zero-item feed is a stale *failure* (e.g. the old
+        // metered-API "credit balance" errors that completed with no stories) —
+        // treat it as not-fresh so the routine rebuilds and the errors clear.
+        const fresh = cached && cached.date === londonDate() && cached.generatedAt
+          && !(useRoutine && !hasItems);
         if (fresh) return json(cached);
         // When the routine owns generation, never trigger a metered API build
-        // here (that's what was caching the "credit balance too low" errors).
-        // A personalised feed nudges the routine to build it (throttled); the
-        // shared feed is populated by the routine's schedule + refresh.
-        const useRoutine = String(env.FEED_SOURCE || "").toLowerCase() === "routine";
+        // here. A personalised feed nudges the routine (throttled); the shared
+        // feed is populated by the routine's schedule + refresh.
         if (useRoutine && routineFireConfigured(env)) {
           if (t.key !== "shared") {
             ctx.waitUntil(fireRoutine(env, {
@@ -851,10 +856,10 @@ export default {
               rateKey: `routine:last_fire:${t.key}`,
             }));
           }
-          return json(cached && cached.items?.length ? { ...cached, generating: true } : generatingShell());
+          return json(hasItems ? { ...cached, generating: true } : generatingShell());
         }
         ctx.waitUntil(startBuild(env, t.key, t.profile, t.writeKeys));
-        return json(cached && cached.items?.length ? { ...cached, generating: true } : generatingShell());
+        return json(hasItems ? { ...cached, generating: true } : generatingShell());
       } catch (e) { return json({ error: "generation failed", detail: String(e) }, 500); }
     }
 
