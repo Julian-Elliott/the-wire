@@ -689,7 +689,12 @@ export default {
       try {
         const t = await resolveTarget(env, headerUid);
         const cached = await readJSON(env, t.writeKeys.latest);
-        if (cached && cached.date === londonDate() && cached.items?.length) return json(cached);
+        // A completed build for today is fresh even if it produced zero items
+        // (e.g. web search disabled → empty desks). `generatedAt` is only set by
+        // a real build; the generating shell leaves it null. Returning it lets
+        // the client show the per-desk report instead of spinning forever.
+        const fresh = cached && cached.date === londonDate() && cached.generatedAt;
+        if (fresh) return json(cached);
         ctx.waitUntil(startBuild(env, t.key, t.profile, t.writeKeys));
         return json(cached && cached.items?.length ? { ...cached, generating: true } : generatingShell());
       } catch (e) { return json({ error: "generation failed", detail: String(e) }, 500); }
