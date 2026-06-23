@@ -202,16 +202,18 @@ function londonDate() {
 }
 const KV_KEY = "briefing:latest";
 
-// in-isolate guard so concurrent first-hits in the same isolate don't double-build
+// in-isolate guard so concurrent hits don't kick off duplicate builds
 let inflight = null;
 
 async function buildBriefing(env) {
+  // Fetch all six desks in parallel — wall time is the slowest desk, not the sum.
+  const results = await Promise.all(CAT_ORDER.map(c => fetchCategory(env, c)));
   const byCat = {}; let fixture = null; const report = {};
-  for (const c of CAT_ORDER) {
-    const r = await fetchCategory(env, c);
+  CAT_ORDER.forEach((c, i) => {
+    const r = results[i];
     byCat[c] = r.items; report[c] = { n: r.items.length, status: r.status };
     if (c === "liverpool") fixture = r.fixture;
-  }
+  });
   const items = interleave(byCat);
   const payload = { date: londonDate(), generatedAt: new Date().toISOString(), items, fixture, report };
   if (env.WIRE_KV) {
@@ -222,18 +224,23 @@ async function buildBriefing(env) {
   return payload;
 }
 
-async function getOrBuild(env, { force = false } = {}) {
-  if (force) return buildBriefing(env);
-  let cached = null;
-  if (env.WIRE_KV) {
-    const raw = await env.WIRE_KV.get(KV_KEY);
-    if (raw) { try { cached = JSON.parse(raw); } catch (_) {} }
-  }
-  if (cached && cached.date === londonDate() && cached.items?.length) return cached;
-  if (inflight) return inflight;          // coalesce concurrent builds in this isolate
-  inflight = buildBriefing(env).finally(() => { inflight = null; });
+// Start a build if one isn't already running, and coalesce concurrent callers onto it.
+function startBuild(env) {
+  if (!inflight) inflight = buildBriefing(env).finally(() => { inflight = null; });
   return inflight;
 }
+
+async function readCache(env) {
+  if (!env.WIRE_KV) return null;
+  const raw = await env.WIRE_KV.get(KV_KEY);
+  if (!raw) return null;
+  try { return JSON.parse(raw); } catch (_) { return null; }
+}
+
+// Placeholder returned immediately while a build runs in the background.
+const generatingShell = () => ({
+  date: londonDate(), generatedAt: null, items: [], fixture: null, report: {}, generating: true,
+});
 
 const json = (obj, status = 200) =>
   new Response(JSON.stringify(obj), {
@@ -247,13 +254,23 @@ export default {
     const url = new URL(request.url);
 
     if (url.pathname === "/api/today") {
-      try { return json(await getOrBuild(env)); }
-      catch (e) { return json({ error: "generation failed", detail: String(e) }, 500); }
+      try {
+        const cached = await readCache(env);
+        if (cached && cached.date === londonDate() && cached.items?.length) return json(cached);
+        // No fresh briefing yet: build in the background so the client never blocks,
+        // and return immediately (stale cache if we have one, else a generating shell).
+        ctx.waitUntil(startBuild(env));
+        return json(cached && cached.items?.length ? { ...cached, generating: true } : generatingShell());
+      } catch (e) { return json({ error: "generation failed", detail: String(e) }, 500); }
     }
 
     if (url.pathname === "/api/refresh" && request.method === "POST") {
-      try { return json(await getOrBuild(env, { force: true })); }
-      catch (e) { return json({ error: "generation failed", detail: String(e) }, 500); }
+      try {
+        // Kick a fresh build in the background and return at once; the page polls /api/today.
+        ctx.waitUntil(startBuild(env));
+        const cached = await readCache(env);
+        return json(cached && cached.items?.length ? { ...cached, generating: true } : generatingShell());
+      } catch (e) { return json({ error: "generation failed", detail: String(e) }, 500); }
     }
 
     // everything else: static assets (index.html etc.)
@@ -262,6 +279,6 @@ export default {
   },
 
   async scheduled(event, env, ctx) {
-    ctx.waitUntil(buildBriefing(env));
+    ctx.waitUntil(startBuild(env));
   },
 };

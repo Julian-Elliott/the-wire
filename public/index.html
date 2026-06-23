@@ -124,20 +124,50 @@ const state = {
 const esc = s => String(s==null?"":s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const longDate = () => new Date().toLocaleDateString("en-GB",{weekday:"long",day:"numeric",month:"long",year:"numeric"});
 
+async function fetchData(force){
+  const res = force
+    ? await fetch("/api/refresh", { method:"POST" })
+    : await fetch("/api/today");
+  return res.json();
+}
+
+// True while the server is still generating and we have no stories to show yet.
+const isBuilding = d => d && d.generating && (!d.items || !d.items.length);
+
 async function load(force){
+  clearTimeout(window.__poll);
   state.loading = true; state.error = null; render();
   try{
-    const res = force
-      ? await fetch("/api/refresh", { method:"POST" })
-      : await fetch("/api/today");
-    const data = await res.json();
+    const data = await fetchData(force);
     if (data.error) throw new Error(data.detail || data.error);
     state.data = data;
+    if (isBuilding(data)){
+      // Briefing is generating in the background — keep the loading state and poll.
+      window.__poll = setTimeout(poll, 4000);
+    } else {
+      state.loading = false;
+    }
   }catch(e){
-    state.error = String(e.message || e);
-  }finally{
-    state.loading = false; render();
+    state.error = String(e.message || e); state.loading = false;
   }
+  render();
+}
+
+// Poll /api/today (never forces a rebuild) until the background build lands.
+async function poll(){
+  try{
+    const data = await fetchData(false);
+    if (!data.error){
+      state.data = data;
+      if (isBuilding(data)) window.__poll = setTimeout(poll, 4000);
+      else state.loading = false;
+    } else {
+      window.__poll = setTimeout(poll, 5000);
+    }
+  }catch(_){
+    window.__poll = setTimeout(poll, 5000); // transient during build — keep trying
+  }
+  render();
 }
 
 function muteType(t){
@@ -193,7 +223,8 @@ function render(){
   if(!toks.length) toks.push({t:"Loading the wire…", c:"var(--muted)"});
   const tickerHtml = [...toks,...toks].map(tk=>`<span class="tok"><span class="tok-dot" style="background:${tk.c}"></span><span style="color:${tk.c}">${esc(tk.t)}</span></span>`).join("");
 
-  const sumLine = state.loading ? "Loading your briefing…"
+  const sumLine = isBuilding(state.data) ? "Building this morning’s briefing — pulling all six desks live. This takes about 30–60 seconds…"
+    : state.loading ? "Loading your briefing…"
     : total ? CAT_ORDER.filter(k=>!state.prefs.mutedCats.includes(k)&&c[k]).map(k=>`${c[k]} ${CATS[k].label.toLowerCase()}`).join(" · ")
     : "Nothing in the tray yet.";
 
