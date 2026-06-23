@@ -27,20 +27,12 @@ id = "d83154c6f90442f7a287cc1cd8938e80"
 pattern = "desk.databased.business"
 custom_domain = true
 
-# Optional: override the model. Defaults to claude-sonnet-4-6 in the Worker.
-# [vars]
-# MODEL = "claude-sonnet-4-6"
-
-# Sign in with Apple (optional). The whole flow is dormant until these are set,
-# so the app runs fine without them.
-#   1. In the Apple Developer portal create a Services ID (this is APPLE_CLIENT_ID),
-#      register the domain desk.databased.business and the return URL
-#      https://desk.databased.business/auth/apple/callback
-#   2. Set the two vars below, then add the session secret:
-#        wrangler secret put SESSION_SECRET   # any long random string
-# [vars]
-# APPLE_CLIENT_ID = "business.databased.desk"   # your Services ID
-# APPLE_REDIRECT_URI = "https://desk.databased.business/auth/apple/callback"
-# Paste the contents of Apple's domain-verification file so the Worker serves it
-# at /.well-known/apple-developer-domain-association.txt :
-# APPLE_DOMAIN_ASSOCIATION = "...file contents..."
+# Sign in with Apple — Services ID + redirect (public, safe to commit so they
+# survive `wrangler deploy`). The session secret is set separately as an
+# encrypted secret (Dashboard → Worker → Settings → Variables, or
+# `wrangler secret put SESSION_SECRET`). Sign-in stays dormant until
+# SESSION_SECRET is also present.
+[vars]
+APPLE_CLIENT_ID = "desk.databased.business"
+APPLE_REDIRECT_URI = "https://desk.databased.business/auth/apple/callback"
+# MODEL = "claude-sonnet-4-6"   # optional model override
