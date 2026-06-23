@@ -208,7 +208,7 @@ const state = {
   read: new Set(),
   seenBefore: (function(){ try{ return localStorage.getItem("jackwire:lastseen")||""; }catch(_){ return ""; } })(),
   onboard: (function(){ try{ return localStorage.getItem("jackwire:onboarded")!=="1"; }catch(_){ return true; } })(),
-  auth: { enabled:false, signedIn:false, email:null },
+  auth: { enabled:false, signedIn:false, email:null, name:null },
   setupDone: (function(){ try{ return localStorage.getItem("jackwire:setup")==="1"; }catch(_){ return false; } })(),
   catalogue: null, picked: new Set(), deskIndex: {}, createOpen: false, createGroup: null, preview: null,
 };
@@ -301,7 +301,7 @@ async function putProfile(regenerate){
 // ---- account / sign-in --------------------------------------------------
 async function fetchMe(){
   try{ const r = await fetch("/api/me"); const d = await r.json();
-    state.auth = { enabled: !!d.appleEnabled, signedIn: !!d.signedIn, email: d.email||null };
+    state.auth = { enabled: !!d.appleEnabled, signedIn: !!d.signedIn, email: d.email||null, name: d.name||null };
   }catch(_){}
 }
 // Convert the server's profile shape ({desks:{enabled,custom}}) to the client's
@@ -674,7 +674,7 @@ function render(){
     </header>
     <div class="ticker" aria-hidden="true"><div class="ticker-track">${tickerHtml}</div></div>
     ${settingsHtml}
-    <section class="hero"><h2 class="hello">${greeting()}, Jack.</h2><p class="sum">${esc(sumLine)}${nNew?` · <span style="color:var(--amber)">${nNew} new</span>`:""}</p></section>
+    <section class="hero"><h2 class="hello">${greeting()}${state.auth.name?`, ${esc(state.auth.name)}`:""}.</h2><p class="sum">${esc(sumLine)}${nNew?` · <span style="color:var(--amber)">${nNew} new</span>`:""}</p></section>
     <nav class="filters">${filterBtns}</nav>
     <main class="feed">${onboardHtml}${feedHtml}</main>
     <footer class="foot">British English, £, no ads, no comment columns. Your desks, each with its own voice — swipe to tune them. Refreshed through the day, newest at the top.${pulled}</footer>
