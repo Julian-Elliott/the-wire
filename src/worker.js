@@ -452,6 +452,80 @@ async function resolveTarget(env, u) {
   };
 }
 
+// ---- external ingest -----------------------------------------------------
+// Lets a Claude Code Routine (run on the subscription, not the metered API)
+// research the shared feed with its own web search and POST the finished
+// briefing here. Dormant unless INGEST_SECRET is set, so deploys are safe
+// before the routine exists. See routines/SETUP.md.
+const ingestEnabled = env => !!(env.INGEST_SECRET && String(env.INGEST_SECRET).length >= 16);
+
+function timingSafeEqual(a, b) {
+  a = String(a || ""); b = String(b || "");
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+
+function ingestAuthed(env, request) {
+  const hdr = request.headers.get("authorization") || "";
+  const bearer = hdr.toLowerCase().startsWith("bearer ") ? hdr.slice(7).trim() : "";
+  const key = request.headers.get("x-ingest-key") || bearer;
+  return ingestEnabled(env) && timingSafeEqual(key, env.INGEST_SECRET);
+}
+
+// Trust the desk id supplied per item; assign our own ids and clamp lengths.
+function normalizeIngest(items) {
+  return (items || [])
+    .filter(x => x && x.title && typeof x.category === "string" && x.category.trim())
+    .slice(0, 200)
+    .map(x => ({
+      id: uid(), category: String(x.category).replace(/[^A-Za-z0-9_-]/g, "").slice(0, 40),
+      title: String(x.title).slice(0, 240),
+      summary: x.summary ? String(x.summary).slice(0, 400) : "",
+      why: x.why ? String(x.why).slice(0, 400) : "",
+      contentType: x.contentType ? String(x.contentType).slice(0, 40) : "News",
+      source: x.source ? String(x.source).slice(0, 120) : "",
+      url: x.url ? String(x.url).slice(0, 600) : "",
+      direction: x.direction || null,
+      changePct: x.changePct || null,
+    }))
+    .filter(x => x.category);
+}
+
+// Persist an externally-supplied briefing into the SHARED feed, merging into
+// today's running feed exactly like the cron build does.
+async function ingestBriefing(env, payload) {
+  const fresh = normalizeIngest(payload && payload.items);
+  const stamp = new Date().toISOString();
+  const slot = londonSlot();
+  fresh.forEach(it => { it.addedAt = stamp; it.slot = slot; });
+
+  const writeKeys = { latest: SHARED_KEY, snapshot: `briefing:${londonDate()}` };
+  let prior = [];
+  const existing = await readJSON(env, writeKeys.latest);
+  if (existing && existing.date === londonDate() && Array.isArray(existing.items)) prior = existing.items;
+  const items = mergeItems(prior, fresh);
+
+  // Report covers the shared built-in desks (so a desk that came back empty
+  // still shows as "quiet") plus any extra categories the routine sent.
+  const cats = [...new Set([...CAT_ORDER, ...fresh.map(it => it.category)])];
+  const report = {};
+  for (const id of cats) {
+    const n = fresh.filter(it => it.category === id).length;
+    report[id] = { n, status: n ? "ok" : "0 stories", label: (CATS[id] && CATS[id].label) || id, builtin: CAT_ORDER.includes(id) };
+  }
+  const desks = cats.map(id => ({ id, label: (CATS[id] && CATS[id].label) || id, builtin: CAT_ORDER.includes(id) }));
+  const fixture = (payload && typeof payload.fixture === "string") ? payload.fixture : null;
+
+  const out = { date: londonDate(), generatedAt: stamp, slot, items, fixture, report, desks, source: "routine" };
+  if (env.WIRE_KV) {
+    await env.WIRE_KV.put(writeKeys.latest, JSON.stringify(out));
+    await env.WIRE_KV.put(writeKeys.snapshot, JSON.stringify(out), { expirationTtl: 60 * 60 * 24 * 5 });
+  }
+  return out;
+}
+
 // ---- onboarding: cached desk "pitches" + location desk + live preview ----
 const slug = s => String(s).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40);
 const pitchKey = id => `pitch:${id}`;
@@ -710,6 +784,19 @@ export default {
       } catch (e) { return json({ error: "generation failed", detail: String(e) }, 500); }
     }
 
+    // A Claude Code Routine POSTs the finished shared briefing here (see
+    // routines/SETUP.md). Dormant until INGEST_SECRET is set.
+    if (url.pathname === "/api/ingest" && request.method === "POST") {
+      if (!ingestEnabled(env)) return json({ error: "ingest not configured" }, 404);
+      if (!ingestAuthed(env, request)) return json({ error: "unauthorized" }, 401);
+      let body = {}; try { body = await request.json(); } catch (_) { return json({ error: "invalid JSON body" }, 400); }
+      if (!Array.isArray(body.items)) return json({ error: "expected { items: [...] }" }, 400);
+      try {
+        const out = await ingestBriefing(env, body);
+        return json({ ok: true, date: out.date, slot: out.slot, accepted: out.items.length, report: out.report });
+      } catch (e) { return json({ error: "ingest failed", detail: String(e) }, 500); }
+    }
+
     if (url.pathname === "/api/profile" && (request.method === "PUT" || request.method === "POST")) {
       try {
         let body = {}; try { body = await request.json(); } catch (_) {}
@@ -734,8 +821,13 @@ export default {
 
   async scheduled(event, env, ctx) {
     ctx.waitUntil((async () => {
-      // shared briefing for anonymous visitors
-      await startBuild(env, "shared", null, { latest: SHARED_KEY, snapshot: `briefing:${londonDate()}` });
+      // shared briefing for anonymous visitors — skipped when a Claude Routine
+      // owns the shared feed (FEED_SOURCE="routine"), so the cron doesn't
+      // overwrite the routine's output with a metered API build.
+      const useRoutine = String(env.FEED_SOURCE || "").toLowerCase() === "routine";
+      if (!useRoutine) {
+        await startBuild(env, "shared", null, { latest: SHARED_KEY, snapshot: `briefing:${londonDate()}` });
+      }
       // then each known personalised user
       if (env.WIRE_KV) {
         try {
