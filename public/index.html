@@ -88,6 +88,14 @@ a{ color:inherit; text-decoration:none; }
 .sw{ position:absolute; top:12px; font-family:'JetBrains Mono',monospace; font-size:11px; font-weight:700; padding:4px 9px; border-radius:7px; opacity:0; pointer-events:none; z-index:2; }
 .sw.like{ left:12px; color:#bdf5cd; background:rgba(70,192,106,.18); border:1px solid var(--up); }
 .sw.nope{ right:12px; color:#ffd1c8; background:rgba(240,86,58,.16); border:1px solid var(--down); }
+.new-pill{ font-family:'JetBrains Mono',monospace; font-size:9px; font-weight:700; letter-spacing:.12em; color:#15171b; background:var(--amber); border-radius:5px; padding:1px 6px; }
+.card.onboard{ border-left-color:var(--amber); background:linear-gradient(180deg, rgba(242,169,59,.10), var(--panel)); }
+.onb-steps{ display:flex; gap:10px; margin:2px 0 4px; flex-wrap:wrap; }
+.onb-step{ font-size:12.5px; color:var(--muted); display:flex; align-items:center; gap:7px; }
+.onb-arrow{ font-family:'JetBrains Mono',monospace; font-weight:700; }
+@keyframes wobble{ 0%,100%{ transform:translateX(0) rotate(0); } 18%{ transform:translateX(11px) rotate(1.6deg); } 38%{ transform:translateX(-9px) rotate(-1.3deg); } 58%{ transform:translateX(6px) rotate(.8deg); } 78%{ transform:translateX(-3px); } }
+.hintwobble{ animation:wobble 1.5s ease-in-out .4s 2; }
+@media (prefers-reduced-motion:reduce){ .hintwobble{ animation:none; } }
 .card-top{ display:flex; align-items:center; gap:10px; margin-bottom:8px; }
 .cat{ font-family:'JetBrains Mono',monospace; font-size:10.5px; letter-spacing:.14em; text-transform:uppercase; font-weight:700; }
 .persona{ font-family:'JetBrains Mono',monospace; font-size:10px; color:var(--faint); letter-spacing:.04em; }
@@ -165,10 +173,17 @@ const state = {
   data: null, error: null, loading: true, filter: "all",
   showSettings: false, showAddDesk: false, toast: null,
   read: new Set(),
+  seenBefore: (function(){ try{ return localStorage.getItem("jackwire:lastseen")||""; }catch(_){ return ""; } })(),
+  onboard: (function(){ try{ return localStorage.getItem("jackwire:onboarded")!=="1"; }catch(_){ return true; } })(),
 };
 
 const esc = s => String(s==null?"":s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const longDate = () => new Date().toLocaleDateString("en-GB",{weekday:"long",day:"numeric",month:"long",year:"numeric"});
+function londonHour(){ try{ return parseInt(new Intl.DateTimeFormat("en-GB",{timeZone:"Europe/London",hour:"2-digit",hour12:false}).format(new Date()),10)%24; }catch(_){ return new Date().getHours(); } }
+const greeting = () => { const h=londonHour(); return h<12?"Good morning":h<18?"Good afternoon":"Good evening"; };
+const isNew = it => !!(it.addedAt && state.seenBefore && String(it.addedAt) > String(state.seenBefore));
+function markSeen(){ try{ localStorage.setItem("jackwire:lastseen", new Date().toISOString()); }catch(_){} }
+function dismissOnboard(){ state.onboard=false; try{ localStorage.setItem("jackwire:onboarded","1"); }catch(_){} render(); }
 
 // ---- desk helpers (built-in + custom) ------------------------------------
 function customById(id){ return (state.profile.desks.custom||[]).find(d=>d.id===id); }
@@ -219,8 +234,10 @@ function baseItems(){
 function visibleItems(){
   return baseItems()
     .filter(i => state.filter==="all" || i.category===state.filter)
-    .sort((a,b)=> score(b)-score(a));
+    // newest batch first (afternoon/evening on top), preference as the tiebreaker
+    .sort((a,b)=>{ const t=String(b.addedAt||"").localeCompare(String(a.addedAt||"")); return t!==0 ? t : score(b)-score(a); });
 }
+function newCount(){ return baseItems().filter(isNew).length; }
 function counts(){ const c={}; deskOrder().forEach(id=> c[id]= baseItems().filter(i=>i.category===id).length); return c; }
 
 // ---- read (dismissed-today) persistence ----------------------------------
@@ -259,7 +276,7 @@ async function fetchData(force){
     : await fetch("/api/today?u="+encodeURIComponent(state.uid));
   return res.json();
 }
-function applyData(data){ state.data = data; hydrateRead(data.date); }
+function applyData(data){ state.data = data; hydrateRead(data.date); if(data.items && data.items.length) markSeen(); }
 const isBuilding = d => d && d.generating && (!d.items || !d.items.length);
 
 async function load(force){
@@ -388,12 +405,12 @@ function render(){
       const arrow = it.direction==="up"?"▲":it.direction==="down"?"▼":"■";
       const titleHtml = it.url ? `<a href="${esc(it.url)}" target="_blank" rel="noreferrer">${esc(it.title)}</a>` : esc(it.title);
       return `<article class="card" data-id="${esc(it.id)}" style="--ac:${ac}">
-        <div class="sw like">▸ More like this</div>
-        <div class="sw nope">◂ Less of this</div>
+        <div class="sw like">✓ Read</div>
+        <div class="sw nope">◂ Not for me</div>
         <div class="card-top">
           <span class="cat" style="color:${ac}">${esc(info.label)}</span>
           <span class="persona">${esc(info.persona)}</span>
-          <button class="down" data-mute="${esc(it.contentType)}" title="Mute “${esc(it.contentType)}”">▾ less like this</button>
+          ${isNew(it)?`<span class="new-pill">NEW</span>`:""}
         </div>
         <h3 class="h">${titleHtml}</h3>
         ${it.summary?`<p class="p">${esc(it.summary)}</p>`:""}
@@ -431,16 +448,31 @@ function render(){
           </div>` : `<div class="row" style="margin-top:10px"><button class="linkbtn" id="d-new">＋ New desk</button></div>`}
       </div></div>
       <div class="set-row"><span class="set-label">Muted types</span><div class="set-body"><div class="chips">
-        ${mutedTypes().length===0?`<span class="set-empty">None muted. Swipe left or tap “less like this” to mute a type.</span>`:""}
+        ${mutedTypes().length===0?`<span class="set-empty">None muted. Keep swiping a kind of story left and it gets muted automatically.</span>`:""}
         ${mutedTypes().map(t=>`<button class="chip muted" data-restore="${esc(t)}">${esc(t)} ✕</button>`).join("")}
       </div></div></div>
       <div class="set-row"><span class="set-label">Tuning</span><div class="set-body">
-        <div class="hint">Swipe a card right for “more like this”, left for “less”. Your desks learn and the next pull is tailored to you.</div>
+        <div class="hint">Swipe a card right to mark it read, left for not-for-me. Your desks learn and the next pull is tailored to you.</div>
         <div class="row" style="margin-top:8px"><button class="linkbtn" id="reset-learn">Reset what I’ve learned</button></div>
       </div></div>
     </div>`;
 
   const pulled = state.data && state.data.date ? ` · last pulled ${esc(state.data.date)}` : "";
+  const nNew = newCount();
+
+  const onboardHtml = (state.onboard && !state.error) ? `
+    <article class="card onboard hintwobble" data-onboard="1" style="--ac:var(--amber)">
+      <div class="sw like">✓ Read</div>
+      <div class="sw nope">◂ Not for me</div>
+      <div class="card-top"><span class="cat" style="color:var(--amber)">Start here</span><span class="persona">swipe to learn</span></div>
+      <h3 class="h">Swipe to tune your wire</h3>
+      <p class="p">Drag a story <strong>right</strong> to mark it read, <strong>left</strong> if it’s not for you. Each desk quietly learns what you like and tailors what it brings.</p>
+      <div class="onb-steps">
+        <span class="onb-step"><span class="onb-arrow" style="color:var(--up)">▸</span> right = read</span>
+        <span class="onb-step"><span class="onb-arrow" style="color:var(--down)">◂</span> left = not for me</span>
+      </div>
+      <div class="card-foot"><span class="type">Swipe this card away to begin</span></div>
+    </article>` : "";
 
   app.innerHTML = `
     <header class="mast">
@@ -453,10 +485,10 @@ function render(){
     </header>
     <div class="ticker" aria-hidden="true"><div class="ticker-track">${tickerHtml}</div></div>
     ${settingsHtml}
-    <section class="hero"><h2 class="hello">Good morning, Jack.</h2><p class="sum">${esc(sumLine)}</p></section>
+    <section class="hero"><h2 class="hello">${greeting()}, Jack.</h2><p class="sum">${esc(sumLine)}${nNew?` · <span style="color:var(--amber)">${nNew} new</span>`:""}</p></section>
     <nav class="filters">${filterBtns}</nav>
-    <main class="feed">${feedHtml}</main>
-    <footer class="foot">British English, £, no ads, no comment columns. Your desks, each with its own voice — swipe to tune them. Refreshed automatically every morning.${pulled}</footer>
+    <main class="feed">${onboardHtml}${feedHtml}</main>
+    <footer class="foot">British English, £, no ads, no comment columns. Your desks, each with its own voice — swipe to tune them. Refreshed through the day, newest at the top.${pulled}</footer>
     ${state.toast?`<div class="toast"><span>${esc(state.toast.msg)}</span><button id="undo">Undo</button></div>`:""}
   `;
   wire();
@@ -513,8 +545,9 @@ function wire(){
   document.querySelectorAll("[data-remove]").forEach(b=> b.onclick = ()=> removeCustomDesk(b.dataset.remove));
   document.querySelectorAll("[data-restore]").forEach(b=> b.onclick = ()=> restoreType(b.dataset.restore));
 
-  document.querySelectorAll(".card[data-id]").forEach(card=>{
+  document.querySelectorAll(".card[data-id], .card[data-onboard]").forEach(card=>{
     const id = card.dataset.id;
+    const onboardCard = !!card.dataset.onboard;
     let sx=0, sy=0, dx=0, dragging=false, decided=false, horizontal=false;
     const like = card.querySelector(".sw.like"), nope = card.querySelector(".sw.nope");
     const reset = ()=>{ card.style.transform=""; if(like)like.style.opacity=0; if(nope)nope.style.opacity=0; };
@@ -538,11 +571,12 @@ function wire(){
     const finish = ()=>{
       if(!dragging){ return; }
       dragging=false; card.classList.remove("dragging");
-      const it = state.data && state.data.items ? state.data.items.find(x=>x.id===id) : null;
-      if(horizontal && Math.abs(dx)>120 && it){
+      const it = (!onboardCard && state.data && state.data.items) ? state.data.items.find(x=>x.id===id) : null;
+      const committed = horizontal && Math.abs(dx)>120 && (onboardCard || it);
+      if(committed){
         const dir = dx>0?1:-1;
         card.style.transform = `translateX(${dir*620}px) rotate(${dir*22}deg)`; card.style.opacity="0";
-        setTimeout(()=>{ dir>0 ? swipeRight(it) : swipeLeft(it); }, 170);
+        setTimeout(()=>{ onboardCard ? dismissOnboard() : (dir>0 ? swipeRight(it) : swipeLeft(it)); }, 170);
       } else { reset(); }
     };
     card.addEventListener("pointerup", finish);
