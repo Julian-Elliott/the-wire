@@ -41,7 +41,7 @@ APPLE_REDIRECT_URI = "https://desk.databased.business/auth/apple/callback"
 # Anthropic API on the cron (default). Set to "routine" once the Claude Code
 # Routine is pushing the feed to /api/ingest, so the cron steps aside instead
 # of overwriting it with a metered build. See routines/SETUP.md.
-# FEED_SOURCE = "routine"
+FEED_SOURCE = "routine"
 #
 # /api/ingest stays dormant until the encrypted secret INGEST_SECRET is set
 # (wrangler secret put INGEST_SECRET — NOT committed here).
