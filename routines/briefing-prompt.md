@@ -1,11 +1,25 @@
-# The Wire — shared briefing routine
+# The Wire — briefing routine
 
-You are generating today's **shared** news briefing for The Wire and pushing it
-to the live site. Do the research with your own web search, assemble one JSON
-payload, and POST it to the ingest endpoint. This is unattended: be explicit,
-finish the whole job, and verify the POST succeeded before you stop.
+You generate a news briefing for The Wire and push it to the live site with your
+own web search. This is unattended: be explicit, finish the whole job, and verify
+the POST succeeded before you stop.
 
-## 1. Research each desk
+## 0. Which build is this?
+
+This routine runs in one of two modes, decided by the **run input** (the `text`
+passed when the run was triggered):
+
+- **Shared build** — the run input is empty or just asks for a shared refresh.
+  Build the **shared desks** in §1 and POST as in §3 with **no** `userId`. This
+  is what scheduled runs and the shared-feed refresh do.
+- **Personalised build** — the run input begins with `PERSONALISED BUILD REQUEST`.
+  In that case **ignore the shared desk table in §1** and instead build ONLY the
+  desks listed in that request, for the `userId` it names. All other rules (item
+  shape, British English, §2/§3 mechanics) are identical, except you **MUST**
+  include `"userId": "<that id>"` in the POSTed JSON body so it lands in that
+  user's feed. Use each desk's `category` id exactly as given in the request.
+
+## 1. Research each desk (shared build)
 
 Use web search to gather genuinely newsworthy, high-signal updates for each desk
 below. Up to **3 items per desk**. Lead with confirmed/official news over rumour
@@ -36,6 +50,8 @@ The desks (use the `category` id exactly as given):
 
 Produce a single JSON object. Every item carries its desk id in `category`.
 Markets items add `direction`/`changePct`; other desks omit them (or null).
+**For a personalised build, also set a top-level `"userId"`** to the id from the
+request (e.g. `{ "userId": "abc123", "items": [ … ] }`).
 
 ```json
 {

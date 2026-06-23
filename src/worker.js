@@ -482,16 +482,22 @@ function ingestAuthed(env, request) {
 // ROUTINE_FIRE_TOKEN are set, so deploys stay safe. See routines/SETUP.md.
 const routineFireConfigured = env => !!(env.ROUTINE_FIRE_URL && env.ROUTINE_FIRE_TOKEN);
 
-async function fireRoutine(env, reason) {
+// Fire the routine's API trigger. opts.text overrides the run instructions (used
+// to ask for a personalised build); opts.rateKey gives a separate throttle
+// window per target (shared vs each user) so they don't starve each other.
+async function fireRoutine(env, opts) {
+  opts = opts || {};
   if (!routineFireConfigured(env)) return { ok: false, reason: "not configured" };
-  // Protect the routine's daily run cap: at most one fire per window.
+  // Protect the routine's daily run cap: at most one fire per window per target.
   const minInterval = Number(env.ROUTINE_FIRE_MIN_SECONDS || 900);
   const nowSec = Math.floor(Date.now() / 1000);
+  const rateKey = opts.rateKey || "routine:last_fire";
   if (env.WIRE_KV) {
-    const last = Number(await env.WIRE_KV.get("routine:last_fire")) || 0;
+    const last = Number(await env.WIRE_KV.get(rateKey)) || 0;
     const since = nowSec - last;
     if (last && since < minInterval) return { ok: true, throttled: true, retryInSec: minInterval - since };
   }
+  const text = opts.text || `On-demand shared-feed refresh at ${new Date().toISOString()}. Re-run the briefing and POST it to /api/ingest.`;
   let res;
   try {
     res = await fetch(env.ROUTINE_FIRE_URL, {
@@ -502,13 +508,31 @@ async function fireRoutine(env, reason) {
         "anthropic-version": "2023-06-01",
         "content-type": "application/json",
       },
-      body: JSON.stringify({ text: `On-demand shared-feed refresh (${reason}) at ${new Date().toISOString()}. Re-run the briefing and POST it to /api/ingest.` }),
+      body: JSON.stringify({ text }),
     });
   } catch (e) { return { ok: false, error: "network error" }; }
   let data = {}; try { data = await res.json(); } catch (_) {}
   if (!res.ok) return { ok: false, error: (data && data.error && data.error.message) || `HTTP ${res.status}` };
-  if (env.WIRE_KV) await env.WIRE_KV.put("routine:last_fire", String(nowSec), { expirationTtl: 86400 });
+  if (env.WIRE_KV) await env.WIRE_KV.put(rateKey, String(nowSec), { expirationTtl: 86400 });
   return { ok: true, fired: true, session: data.claude_code_session_url || null };
+}
+
+// Instructions passed to the routine (via /fire `text`) to build ONE user's
+// personalised desks and ingest them into that user's feed. The routine prompt
+// branches on the "PERSONALISED BUILD REQUEST" marker. See routines/briefing-prompt.md.
+function personalisedFireText(uid, profile) {
+  const lines = deskList(profile).map(d =>
+    `- category=${d.id} | desk="${d.label}"` +
+    (d.builtin ? " (built-in)" : ` | topic="${d.topic}"`) +
+    ` | types=${(d.types || []).join(",")}`,
+  ).join("\n");
+  return [
+    "PERSONALISED BUILD REQUEST — ignore the shared desk table; build ONLY the desks below for this one user.",
+    `userId: ${uid}`,
+    "Desks to research (same rules; British English; up to 3 high-signal items each; use the category id exactly):",
+    lines,
+    `POST the result to $INGEST_URL exactly as usual, but include "userId": "${uid}" in the JSON body alongside "items" so it lands in this user's feed: {"userId":"${uid}","items":[...]}.`,
+  ].join("\n");
 }
 
 // Trust the desk id supplied per item; assign our own ids and clamp lengths.
@@ -532,33 +556,42 @@ function normalizeIngest(items) {
 
 // Persist an externally-supplied briefing into the SHARED feed, merging into
 // today's running feed exactly like the cron build does.
-async function ingestBriefing(env, payload) {
+async function ingestBriefing(env, payload, target) {
   const fresh = normalizeIngest(payload && payload.items);
   const stamp = new Date().toISOString();
   const slot = londonSlot();
   fresh.forEach(it => { it.addedAt = stamp; it.slot = slot; });
 
-  const writeKeys = { latest: SHARED_KEY, snapshot: `briefing:${londonDate()}` };
+  // Default target is the shared feed; a per-user target redirects the write
+  // and uses that user's desks (so empty desks still show, with real labels).
+  const writeKeys = target && target.latest
+    ? { latest: target.latest, snapshot: target.snapshot }
+    : { latest: SHARED_KEY, snapshot: `briefing:${londonDate()}` };
+  const baseDesks = (target && Array.isArray(target.desks) && target.desks.length)
+    ? target.desks.map(d => ({ id: d.id, label: d.label || (CATS[d.id] && CATS[d.id].label) || d.id, builtin: !!d.builtin }))
+    : CAT_ORDER.map(id => ({ id, label: CATS[id].label, builtin: true }));
+  const labelOf = id => { const b = baseDesks.find(d => d.id === id); return (b && b.label) || (CATS[id] && CATS[id].label) || id; };
+
   let prior = [];
   const existing = await readJSON(env, writeKeys.latest);
   if (existing && existing.date === londonDate() && Array.isArray(existing.items)) prior = existing.items;
   const items = mergeItems(prior, fresh);
 
-  // Report covers the shared built-in desks (so a desk that came back empty
-  // still shows as "quiet") plus any extra categories the routine sent.
-  const cats = [...new Set([...CAT_ORDER, ...fresh.map(it => it.category)])];
+  // Report covers the target's desks (so a desk that came back empty still shows
+  // as "quiet") plus any extra categories the routine sent.
+  const cats = [...new Set([...baseDesks.map(d => d.id), ...fresh.map(it => it.category)])];
   const report = {};
   for (const id of cats) {
     const n = fresh.filter(it => it.category === id).length;
-    report[id] = { n, status: n ? "ok" : "0 stories", label: (CATS[id] && CATS[id].label) || id, builtin: CAT_ORDER.includes(id) };
+    report[id] = { n, status: n ? "ok" : "0 stories", label: labelOf(id), builtin: CAT_ORDER.includes(id) };
   }
-  const desks = cats.map(id => ({ id, label: (CATS[id] && CATS[id].label) || id, builtin: CAT_ORDER.includes(id) }));
+  const desks = cats.map(id => ({ id, label: labelOf(id), builtin: CAT_ORDER.includes(id) }));
   const fixture = (payload && typeof payload.fixture === "string") ? payload.fixture : null;
 
   const out = { date: londonDate(), generatedAt: stamp, slot, items, fixture, report, desks, source: "routine" };
   if (env.WIRE_KV) {
     await env.WIRE_KV.put(writeKeys.latest, JSON.stringify(out));
-    await env.WIRE_KV.put(writeKeys.snapshot, JSON.stringify(out), { expirationTtl: 60 * 60 * 24 * 5 });
+    if (writeKeys.snapshot) await env.WIRE_KV.put(writeKeys.snapshot, JSON.stringify(out), { expirationTtl: 60 * 60 * 24 * 5 });
   }
   return out;
 }
@@ -815,12 +848,18 @@ export default {
       try {
         let body = {}; try { body = await request.json(); } catch (_) {}
         const t = await resolveTarget(env, sUid || cleanUid(body.userId) || queryUid);
-        // The shared feed is owned by the Claude Routine — refresh fires the
-        // routine's API trigger (subscription-billed) instead of a metered
-        // Anthropic API build. Personalised feeds keep the API build path.
+        // When the Claude Routine owns generation, refresh fires its API trigger
+        // (subscription-billed) instead of a metered Anthropic API build — for
+        // the shared feed AND a signed-in user's personalised desks (the routine
+        // is told which desks + which user to build, throttled per target).
         const useRoutine = String(env.FEED_SOURCE || "").toLowerCase() === "routine";
-        if (t.key === "shared" && useRoutine && routineFireConfigured(env)) {
-          const refresh = await fireRoutine(env, "manual refresh");
+        if (useRoutine && routineFireConfigured(env)) {
+          const refresh = t.key === "shared"
+            ? await fireRoutine(env, {})
+            : await fireRoutine(env, {
+                text: personalisedFireText(t.key.slice(2), t.profile),
+                rateKey: `routine:last_fire:${t.key}`,
+              });
           const cached = await readJSON(env, t.writeKeys.latest);
           return json({ ...(cached || generatingShell()), generating: true, refresh });
         }
@@ -838,8 +877,16 @@ export default {
       let body = {}; try { body = await request.json(); } catch (_) { return json({ error: "invalid JSON body" }, 400); }
       if (!Array.isArray(body.items)) return json({ error: "expected { items: [...] }" }, 400);
       try {
-        const out = await ingestBriefing(env, body);
-        return json({ ok: true, date: out.date, slot: out.slot, accepted: out.items.length, report: out.report });
+        // An optional userId routes the briefing into that user's personalised
+        // feed (a routine fired by their refresh); without it, the shared feed.
+        const uid = cleanUid(body.userId);
+        let target = null;
+        if (uid) {
+          const profile = await readJSON(env, profileKey(uid));
+          target = { latest: userBriefKey(uid), snapshot: `${userBriefKey(uid)}:${londonDate()}`, desks: deskList(profile) };
+        }
+        const out = await ingestBriefing(env, body, target);
+        return json({ ok: true, date: out.date, slot: out.slot, accepted: out.items.length, target: uid ? `user:${uid}` : "shared", report: out.report });
       } catch (e) { return json({ error: "ingest failed", detail: String(e) }, 500); }
     }
 
