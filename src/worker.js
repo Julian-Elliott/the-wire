@@ -616,7 +616,7 @@ export default {
     // ---- Sign in with Apple endpoints (no-ops unless configured) ----------
     if (url.pathname === "/api/me") {
       const s = await verifyToken(env, getCookie(request, "sess"));
-      return json({ appleEnabled: appleEnabled(env), signedIn: !!s, email: (s && s.email) || null });
+      return json({ appleEnabled: appleEnabled(env), signedIn: !!s, email: (s && s.email) || null, name: (s && s.name) || null });
     }
     if (url.pathname === "/api/profile" && request.method === "GET") {
       const u = headerUid;
@@ -650,7 +650,13 @@ export default {
         const anon = await readJSON(env, profileKey(flow.u));
         if (!existing && anon) await env.WIRE_KV.put(profileKey(appleUid), JSON.stringify(anon));
       }
-      const sess = await signToken(env, { uid: appleUid, email: payload.email || null, exp: Math.floor(Date.now() / 1000) + 60 * 60 * 24 * 90 });
+      // Apple sends the user's name only on the FIRST authorisation — capture and
+      // persist it so the greeting can use it on later sign-ins too.
+      let name = null;
+      try { const u = JSON.parse(form.get("user") || "null"); if (u && u.name) name = [u.name.firstName, u.name.lastName].filter(Boolean).join(" ").trim() || null; } catch (_) {}
+      if (name && env.WIRE_KV) await env.WIRE_KV.put(`aname:${appleUid}`, JSON.stringify({ name }));
+      else { const saved = await readJSON(env, `aname:${appleUid}`); name = (saved && saved.name) || null; }
+      const sess = await signToken(env, { uid: appleUid, email: payload.email || null, name, exp: Math.floor(Date.now() / 1000) + 60 * 60 * 24 * 90 });
       const h = new Headers({ "Location": "/" });
       h.append("Set-Cookie", `sess=${encodeURIComponent(sess)}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${60 * 60 * 24 * 90}`);
       h.append("Set-Cookie", `aflow=; HttpOnly; Secure; SameSite=None; Path=/; Max-Age=0`);
