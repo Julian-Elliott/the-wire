@@ -18,6 +18,12 @@ crons = ["0 6 * * *"]
 binding = "WIRE_KV"
 id = "d83154c6f90442f7a287cc1cd8938e80"
 
+# Custom domain. Cloudflare auto-creates the DNS record and provisions TLS for
+# this hostname on deploy (the zone databased.business must be in this account).
+[[routes]]
+pattern = "desk.databased.business"
+custom_domain = true
+
 # Optional: override the model. Defaults to claude-sonnet-4-6 in the Worker.
 # [vars]
 # MODEL = "claude-sonnet-4-6"
