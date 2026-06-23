@@ -1,13 +1,16 @@
 /* =========================================================================
    THE WIRE — Jack's edition · Cloudflare Worker
-   - Runs once each morning (cron) and generates the briefing across 6 desks
-   - Caches the result in Workers KV (one shared briefing for everyone)
-   - Serves /api/today (read cache) and /api/refresh (force regenerate)
-   - Static frontend is served from ./public via the assets binding
+   - Generates a daily briefing across a set of "desks" (built-in + custom)
+   - Anonymous visitors get a shared briefing (cheap, one copy in KV)
+   - Once a visitor customises (swipes / adds desks), they get a PERSONAL
+     briefing keyed by an anonymous user id, with their preferences injected
+     into each desk's prompt.
+   - /api/today reads cache (builds in the background), /api/refresh forces a
+     rebuild, /api/profile stores a user's desks + learned weights.
    The Anthropic API key lives ONLY here, as a Worker secret. Never in the client.
    ========================================================================= */
 
-// ---- desks ---------------------------------------------------------------
+// ---- built-in desks ------------------------------------------------------
 const CATS = {
   liverpool: {
     label: "Liverpool",
@@ -54,37 +57,80 @@ const ukRule =
 const noiseRule =
   "Prioritise factual, high-signal updates a smart reader would want. Exclude opinion/comment columns, culture-war or outrage pieces, ragebait, clickbait, rumour-mill churn with no substance, and anything that's mostly someone whinging. No ads.";
 
-function buildPrompt(catId) {
-  const cat = CATS[catId];
-  const types = cat.types.join(", ");
-  const voice = `Write the "summary" and "why" fields in the voice of ${cat.persona.name} (${cat.persona.mbti}): ${cat.voice}. The voice colours phrasing only — never alter or invent facts.`;
-  const base = `${ukRule} ${noiseRule}\n${voice}`;
+// ---- desk resolution (built-ins + a user's custom desks) -----------------
+function deskList(profile) {
+  const enabled = profile && profile.desks && Array.isArray(profile.desks.enabled)
+    ? profile.desks.enabled : null;
+  const builtins = CAT_ORDER
+    .filter(id => !enabled || enabled.includes(id))
+    .map(id => ({ id, builtin: true, label: CATS[id].label, types: CATS[id].types }));
+  const custom = (profile && profile.desks && Array.isArray(profile.desks.custom) ? profile.desks.custom : [])
+    .filter(d => d && d.id && (d.topic || d.label))
+    .map(d => ({
+      id: String(d.id), builtin: false,
+      label: String(d.label || d.topic),
+      topic: String(d.topic || d.label),
+      voice: d.voice ? String(d.voice) : "",
+      voiceName: d.voiceName ? String(d.voiceName) : "",
+      types: Array.isArray(d.types) && d.types.length ? d.types.map(String) : ["News", "Analysis", "Background", "Feature"],
+    }));
+  return [...builtins, ...custom];
+}
 
-  if (catId === "liverpool") {
+// Turn learned weights into a short, honest prompt hint.
+function prefHint(profile) {
+  const w = (profile && profile.weights) || {};
+  const entries = Object.entries(w).filter(([, v]) => typeof v === "number" && isFinite(v));
+  const liked = entries.filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]).slice(0, 10).map(([k]) => k.replace(/^desk:/, ""));
+  const disliked = entries.filter(([, v]) => v < 0).sort((a, b) => a[1] - b[1]).slice(0, 10).map(([k]) => k.replace(/^desk:/, ""));
+  if (!liked.length && !disliked.length) return "";
+  let s = "\nReader preferences, learned from what they engage with:";
+  if (liked.length) s += ` lean towards — ${liked.join(", ")};`;
+  if (disliked.length) s += ` de-emphasise — ${disliked.join(", ")};`;
+  s += " let this gently shape selection, but relevance and accuracy come first — never fabricate, distort, or pad to match preferences.";
+  return s;
+}
+
+function buildPrompt(desk, hint) {
+  const types = (desk.types && desk.types.length ? desk.types : ["News", "Analysis", "Background"]).join(", ");
+  const voiceName = desk.builtin
+    ? `${CATS[desk.id].persona.name} (${CATS[desk.id].persona.mbti})`
+    : (desk.voiceName || "the desk");
+  const voiceDesc = desk.builtin ? CATS[desk.id].voice : (desk.voice || "a clear, knowledgeable, genuinely interesting correspondent");
+  const voice = `Write the "summary" and "why" fields in the voice of ${voiceName}: ${voiceDesc}. The voice colours phrasing only — never alter or invent facts.`;
+  const base = `${ukRule} ${noiseRule}\n${voice}${hint || ""}`;
+
+  if (desk.builtin && desk.id === "liverpool") {
     return `Use web search for the most important Liverpool FC (men's first team) news from the last ~48 hours. Lead with confirmed/official news over rumour, and clearly tag rumours. ${base}
 Return ONLY a JSON object: {"fixture":"<next fixture e.g. 'Liverpool vs Arsenal — Sat, 17:30' or null>","items":[{"title":"factual headline","summary":"<=24 words","why":"why a fan cares","contentType":"one of: ${types}","source":"publication","url":"url"}]}
 Up to ${ITEMS_PER_DESK} items.`;
   }
-  if (catId === "markets") {
+  if (desk.builtin && desk.id === "markets") {
     return `The reader is a UK investor whose ISA holds a globally diversified, volatility-managed multi-asset fund (global equities + bonds, £/GBP-based). Use web search to explain what is moving such a portfolio now. Cover global equities (S&P 500, FTSE 100, MSCI World), bond yields and Bank of England / Fed rate expectations, and the pound. Give the actual reasons. ${base}
 Return ONLY a JSON array: [{"title":"e.g. 'FTSE 100' or 'UK & US bond yields'","direction":"up|down|flat","changePct":"e.g. '+0.4%' or null","summary":"<=24 words","why":"the real reason it moved","contentType":"one of: ${types}","source":"publication","url":"url"}]
 ${ITEMS_PER_DESK} items.`;
   }
-  if (catId === "ev") {
+  if (desk.builtin && desk.id === "ev") {
     return `Use web search for recent (last ~2 weeks) EV, home-battery, solar, home-charging and energy-tariff news relevant to a curious UK buyer who is NOT a techie — affordable new EVs, real range, home battery storage, solar, and money saved in £. Genuinely useful and tempting, never jargon-heavy. ${base}
 Return ONLY a JSON array: [{"title":"...","summary":"<=26 words, plain English with a wink","why":"why a normal person should care (usually £ saved or hassle dodged)","contentType":"one of: ${types}","source":"publication","url":"url"}]
 ${ITEMS_PER_DESK} items.`;
   }
-  if (catId === "worcester") {
+  if (desk.builtin && desk.id === "worcester") {
     return `Use web search for recent local/regional news for Worcester and Worcestershire, plus notable UK-national stories with a local-life impact (councils, roads & rail, community, local business, events, cost of living). Practical — the stuff that affects daily life. ${base}
 Return ONLY a JSON array: [{"title":"...","summary":"<=24 words","why":"why it matters locally","contentType":"one of: ${types}","source":"publication","url":"url"}]
 ${ITEMS_PER_DESK} items.`;
   }
-  if (catId === "gaming") {
+  if (desk.builtin && desk.id === "gaming") {
     return `Use web search for the biggest video-game stories from the last ~week — lead with genuine news (industry, releases, hardware) over filler. Use £ for any UK pricing. ${base}
 Return ONLY a JSON array: [{"title":"...","summary":"<=24 words","why":"why it matters","contentType":"one of: ${types}","source":"publication","url":"url"}]
 Up to ${ITEMS_PER_DESK} items.`;
   }
+  if (!desk.builtin) {
+    return `Use web search for the most important, genuinely newsworthy updates from roughly the last week on this topic: "${desk.topic || desk.label}". Lead with substantive news and real developments over filler; clearly tag anything speculative. ${base}
+Return ONLY a JSON array: [{"title":"factual headline","summary":"<=24 words","why":"why it matters to someone who follows this","contentType":"one of: ${types}","source":"publication","url":"url"}]
+Up to ${ITEMS_PER_DESK} items.`;
+  }
+  // built-in "world" (and any fallback)
   return `Use web search for the top high-profile UK-national and world news from the last ~48 hours that an informed UK reader should know. ${base}
 Return ONLY a JSON array: [{"title":"...","summary":"<=24 words","why":"why it's significant","contentType":"one of: ${types}","source":"publication","url":"url"}]
 Up to ${ITEMS_PER_DESK} items.`;
@@ -152,15 +198,15 @@ function extractJSON(text) {
 let _idc = 0;
 const uid = () => `i${Date.now()}_${_idc++}`;
 
-function normalize(items, catId) {
+function normalize(items, desk) {
   return (items || [])
     .filter(x => x && x.title && x.title !== "__fixture__")
     .map(x => ({
-      id: uid(), category: catId,
+      id: uid(), category: desk.id,
       title: String(x.title),
       summary: x.summary ? String(x.summary) : "",
       why: x.why ? String(x.why) : "",
-      contentType: x.contentType ? String(x.contentType) : CATS[catId].types[0],
+      contentType: x.contentType ? String(x.contentType) : desk.types[0],
       source: x.source ? String(x.source) : "",
       url: x.url ? String(x.url) : "",
       direction: x.direction || null,
@@ -168,26 +214,26 @@ function normalize(items, catId) {
     }));
 }
 
-async function fetchCategory(env, catId) {
+async function fetchDesk(env, desk, hint) {
   let lastErr = null;
   for (let attempt = 0; attempt < 2; attempt++) {
-    const { text, error } = await callClaude(env, buildPrompt(catId));
+    const { text, error } = await callClaude(env, buildPrompt(desk, hint));
     if (error) { lastErr = error; continue; }
     const parsed = extractJSON(text);
     if (!parsed) { lastErr = "couldn’t parse reply"; continue; }
     let items = [], fixture = null;
-    if (catId === "liverpool" && parsed && !Array.isArray(parsed)) { items = parsed.items || []; fixture = parsed.fixture || null; }
+    if (desk.builtin && desk.id === "liverpool" && parsed && !Array.isArray(parsed)) { items = parsed.items || []; fixture = parsed.fixture || null; }
     else if (Array.isArray(parsed)) items = parsed;
     else if (parsed && Array.isArray(parsed.items)) items = parsed.items;
-    items = normalize(items, catId);
+    items = normalize(items, desk);
     if (items.length) return { items, fixture, status: "ok" };
     lastErr = "0 stories";
   }
   return { items: [], fixture: null, status: lastErr || "failed" };
 }
 
-function interleave(byCat) {
-  const out = [], lists = CAT_ORDER.map(c => [...(byCat[c] || [])]);
+function interleave(byCat, order) {
+  const out = [], lists = order.map(c => [...(byCat[c] || [])]);
   let any = true;
   while (any) { any = false; for (const l of lists) if (l.length) { out.push(l.shift()); any = true; } }
   return out;
@@ -195,51 +241,99 @@ function interleave(byCat) {
 
 // ---- date + cache --------------------------------------------------------
 function londonDate() {
-  // YYYY-MM-DD for Europe/London
   return new Intl.DateTimeFormat("en-CA", {
     timeZone: "Europe/London", year: "numeric", month: "2-digit", day: "2-digit",
   }).format(new Date());
 }
-const KV_KEY = "briefing:latest";
+const SHARED_KEY = "briefing:latest";
+const userBriefKey = u => `briefing:user:${u}`;
+const profileKey = u => `profile:${u}`;
+const cleanUid = u => (typeof u === "string" && /^[A-Za-z0-9_-]{8,64}$/.test(u)) ? u : null;
 
-// in-isolate guard so concurrent hits don't kick off duplicate builds
-let inflight = null;
+function isCustomised(p) {
+  if (!p || !p.desks) return false;
+  if (Array.isArray(p.desks.enabled)) return true;
+  if (Array.isArray(p.desks.custom) && p.desks.custom.length) return true;
+  if (p.weights && Object.keys(p.weights).length) return true;
+  return false;
+}
 
-async function buildBriefing(env) {
-  // Fetch all six desks in parallel — wall time is the slowest desk, not the sum.
-  const results = await Promise.all(CAT_ORDER.map(c => fetchCategory(env, c)));
+function sanitizeProfile(p) {
+  p = p && typeof p === "object" ? p : {};
+  const d = p.desks && typeof p.desks === "object" ? p.desks : {};
+  const enabled = Array.isArray(d.enabled)
+    ? d.enabled.filter(id => CAT_ORDER.includes(id))
+    : null;
+  const custom = (Array.isArray(d.custom) ? d.custom : [])
+    .slice(0, 8)
+    .map(x => ({
+      id: (String(x.id || "").replace(/[^A-Za-z0-9_-]/g, "").slice(0, 40)) || `c${Math.random().toString(36).slice(2, 8)}`,
+      label: String(x.label || "").slice(0, 40),
+      topic: String(x.topic || "").slice(0, 200),
+      voice: String(x.voice || "").slice(0, 300),
+      voiceName: String(x.voiceName || "").slice(0, 40),
+      types: Array.isArray(x.types) ? x.types.slice(0, 8).map(t => String(t).slice(0, 30)) : [],
+    }))
+    .filter(x => x.topic || x.label);
+  const weights = {};
+  if (p.weights && typeof p.weights === "object") {
+    let n = 0;
+    for (const [k, v] of Object.entries(p.weights)) {
+      if (n++ >= 120) break;
+      if (typeof v === "number" && isFinite(v)) weights[String(k).slice(0, 48)] = Math.max(-10, Math.min(10, v));
+    }
+  }
+  return { desks: { enabled, custom }, weights };
+}
+
+// in-isolate guard so concurrent hits don't kick off duplicate builds (keyed per user)
+const inflight = new Map();
+
+async function buildBriefing(env, profile, writeKeys) {
+  const desks = deskList(profile);
+  const order = desks.map(d => d.id);
+  const hint = prefHint(profile);
+  // Fetch every desk in parallel — wall time is the slowest desk, not the sum.
+  const results = await Promise.all(desks.map(d => fetchDesk(env, d, hint)));
   const byCat = {}; let fixture = null; const report = {};
-  CAT_ORDER.forEach((c, i) => {
+  desks.forEach((d, i) => {
     const r = results[i];
-    byCat[c] = r.items; report[c] = { n: r.items.length, status: r.status };
-    if (c === "liverpool") fixture = r.fixture;
+    byCat[d.id] = r.items;
+    report[d.id] = { n: r.items.length, status: r.status, label: d.label, builtin: !!d.builtin };
+    if (d.id === "liverpool") fixture = r.fixture;
   });
-  const items = interleave(byCat);
-  const payload = { date: londonDate(), generatedAt: new Date().toISOString(), items, fixture, report };
-  if (env.WIRE_KV) {
-    // keep latest + a dated snapshot (auto-expire snapshots after ~5 days)
-    await env.WIRE_KV.put(KV_KEY, JSON.stringify(payload));
-    await env.WIRE_KV.put(`briefing:${payload.date}`, JSON.stringify(payload), { expirationTtl: 60 * 60 * 24 * 5 });
+  const items = interleave(byCat, order);
+  const payload = {
+    date: londonDate(), generatedAt: new Date().toISOString(),
+    items, fixture, report,
+    desks: desks.map(d => ({ id: d.id, label: d.label, builtin: !!d.builtin })),
+  };
+  if (env.WIRE_KV && writeKeys) {
+    await env.WIRE_KV.put(writeKeys.latest, JSON.stringify(payload));
+    if (writeKeys.snapshot) await env.WIRE_KV.put(writeKeys.snapshot, JSON.stringify(payload), { expirationTtl: 60 * 60 * 24 * 5 });
   }
   return payload;
 }
 
-// Start a build if one isn't already running, and coalesce concurrent callers onto it.
-function startBuild(env) {
-  if (!inflight) inflight = buildBriefing(env).finally(() => { inflight = null; });
-  return inflight;
+// Start a build if one isn't already running for this key, coalescing callers.
+function startBuild(env, key, profile, writeKeys) {
+  if (!inflight.has(key)) {
+    const p = buildBriefing(env, profile, writeKeys).finally(() => inflight.delete(key));
+    inflight.set(key, p);
+  }
+  return inflight.get(key);
 }
 
-async function readCache(env) {
+async function readJSON(env, key) {
   if (!env.WIRE_KV) return null;
-  const raw = await env.WIRE_KV.get(KV_KEY);
+  const raw = await env.WIRE_KV.get(key);
   if (!raw) return null;
   try { return JSON.parse(raw); } catch (_) { return null; }
 }
 
 // Placeholder returned immediately while a build runs in the background.
 const generatingShell = () => ({
-  date: londonDate(), generatedAt: null, items: [], fixture: null, report: {}, generating: true,
+  date: londonDate(), generatedAt: null, items: [], fixture: null, report: {}, desks: [], generating: true,
 });
 
 const json = (obj, status = 200) =>
@@ -248,29 +342,65 @@ const json = (obj, status = 200) =>
     headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
   });
 
+// Resolve which cache/build a request targets: a personalised one if the user
+// has saved a non-empty profile, otherwise the shared briefing.
+async function resolveTarget(env, u) {
+  if (u) {
+    const profile = await readJSON(env, profileKey(u));
+    if (isCustomised(profile)) {
+      return {
+        profile, key: `u:${u}`,
+        writeKeys: { latest: userBriefKey(u), snapshot: `${userBriefKey(u)}:${londonDate()}` },
+      };
+    }
+  }
+  return {
+    profile: null, key: "shared",
+    writeKeys: { latest: SHARED_KEY, snapshot: `briefing:${londonDate()}` },
+  };
+}
+
 // ---- Worker entry points -------------------------------------------------
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
+    const headerUid = cleanUid(url.searchParams.get("u") || request.headers.get("x-user-id"));
 
     if (url.pathname === "/api/today") {
       try {
-        const cached = await readCache(env);
+        const t = await resolveTarget(env, headerUid);
+        const cached = await readJSON(env, t.writeKeys.latest);
         if (cached && cached.date === londonDate() && cached.items?.length) return json(cached);
-        // No fresh briefing yet: build in the background so the client never blocks,
-        // and return immediately (stale cache if we have one, else a generating shell).
-        ctx.waitUntil(startBuild(env));
+        ctx.waitUntil(startBuild(env, t.key, t.profile, t.writeKeys));
         return json(cached && cached.items?.length ? { ...cached, generating: true } : generatingShell());
       } catch (e) { return json({ error: "generation failed", detail: String(e) }, 500); }
     }
 
     if (url.pathname === "/api/refresh" && request.method === "POST") {
       try {
-        // Kick a fresh build in the background and return at once; the page polls /api/today.
-        ctx.waitUntil(startBuild(env));
-        const cached = await readCache(env);
+        let body = {}; try { body = await request.json(); } catch (_) {}
+        const t = await resolveTarget(env, cleanUid(body.userId) || headerUid);
+        ctx.waitUntil(startBuild(env, t.key, t.profile, t.writeKeys));
+        const cached = await readJSON(env, t.writeKeys.latest);
         return json(cached && cached.items?.length ? { ...cached, generating: true } : generatingShell());
       } catch (e) { return json({ error: "generation failed", detail: String(e) }, 500); }
+    }
+
+    if (url.pathname === "/api/profile" && (request.method === "PUT" || request.method === "POST")) {
+      try {
+        let body = {}; try { body = await request.json(); } catch (_) {}
+        const u = cleanUid(body.userId);
+        if (!u) return json({ error: "missing or invalid userId" }, 400);
+        const profile = sanitizeProfile(body.profile);
+        if (env.WIRE_KV) await env.WIRE_KV.put(profileKey(u), JSON.stringify(profile));
+        // Only regenerate when the desk SET changes (not on every swipe sync).
+        if (body.regenerate) {
+          const writeKeys = { latest: userBriefKey(u), snapshot: `${userBriefKey(u)}:${londonDate()}` };
+          ctx.waitUntil(startBuild(env, `u:${u}`, profile, writeKeys));
+          return json({ ok: true, generating: true });
+        }
+        return json({ ok: true });
+      } catch (e) { return json({ error: "profile save failed", detail: String(e) }, 500); }
     }
 
     // everything else: static assets (index.html etc.)
@@ -279,6 +409,21 @@ export default {
   },
 
   async scheduled(event, env, ctx) {
-    ctx.waitUntil(startBuild(env));
+    ctx.waitUntil((async () => {
+      // shared briefing for anonymous visitors
+      await startBuild(env, "shared", null, { latest: SHARED_KEY, snapshot: `briefing:${londonDate()}` });
+      // then each known personalised user
+      if (env.WIRE_KV) {
+        try {
+          const list = await env.WIRE_KV.list({ prefix: "profile:" });
+          for (const k of list.keys) {
+            const u = k.name.slice("profile:".length);
+            const profile = await readJSON(env, profileKey(u));
+            if (!isCustomised(profile)) continue;
+            await startBuild(env, `u:${u}`, profile, { latest: userBriefKey(u), snapshot: `${userBriefKey(u)}:${londonDate()}` });
+          }
+        } catch (_) {}
+      }
+    })());
   },
 };
