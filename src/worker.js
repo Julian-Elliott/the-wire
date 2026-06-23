@@ -50,6 +50,44 @@ const CATS = {
   },
 };
 const CAT_ORDER = ["liverpool", "worcester", "gaming", "ev", "markets", "world"];
+
+// ---- onboarding catalogue: suggested desks grouped for the "build your wire"
+// picker. Built-ins reference CATS by id; topical ones become custom desks.
+const CATALOGUE = [
+  { name: "Sport", desks: [
+    { id: "liverpool", label: "Liverpool FC", builtin: true },
+    { id: "cat-prem", label: "Premier League", topic: "Premier League football — results, transfers, talking points" },
+    { id: "cat-f1", label: "Formula 1", topic: "Formula 1 — race results, driver and team news, regulations" },
+    { id: "cat-nfl", label: "NFL", topic: "NFL American football — games, trades, the playoff race" },
+    { id: "cat-tennis", label: "Tennis", topic: "professional tennis — ATP/WTA results and Grand Slams" },
+    { id: "cat-cricket", label: "Cricket", topic: "international and county cricket" },
+  ]},
+  { name: "Tech & Science", desks: [
+    { id: "gaming", label: "Gaming", builtin: true },
+    { id: "cat-ai", label: "AI", topic: "artificial intelligence — model releases, research and industry moves" },
+    { id: "cat-gadgets", label: "Gadgets", topic: "consumer tech and gadget launches and reviews" },
+    { id: "cat-space", label: "Space", topic: "spaceflight and astronomy" },
+    { id: "cat-science", label: "Science", topic: "notable science and research breakthroughs" },
+  ]},
+  { name: "Money", desks: [
+    { id: "markets", label: "Markets", builtin: true },
+    { id: "ev", label: "EV & Battery", builtin: true },
+    { id: "cat-money", label: "Personal finance", topic: "UK personal finance — savings, mortgages, bills and cost of living" },
+    { id: "cat-property", label: "Property", topic: "the UK housing market and property" },
+    { id: "cat-crypto", label: "Crypto", topic: "cryptocurrency and digital assets" },
+  ]},
+  { name: "Culture", desks: [
+    { id: "cat-film", label: "Film & TV", topic: "film and television — releases, news and reviews" },
+    { id: "cat-music", label: "Music", topic: "the music industry, releases and artists" },
+    { id: "cat-books", label: "Books", topic: "books, authors and publishing" },
+  ]},
+  { name: "News", desks: [
+    { id: "world", label: "World", builtin: true },
+    { id: "worcester", label: "Worcester & UK", builtin: true },
+    { id: "cat-politics", label: "UK Politics", topic: "UK politics and Westminster" },
+    { id: "cat-health", label: "Health", topic: "health, the NHS and wellbeing" },
+  ]},
+];
 const ITEMS_PER_DESK = 3;
 
 const ukRule =
@@ -414,6 +452,75 @@ async function resolveTarget(env, u) {
   };
 }
 
+// ---- onboarding: cached desk "pitches" + location desk + live preview ----
+const slug = s => String(s).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40);
+const pitchKey = id => `pitch:${id}`;
+const getPitch = (env, id) => readJSON(env, pitchKey(id));
+async function putPitch(env, id, pitch) {
+  if (env.WIRE_KV) await env.WIRE_KV.put(pitchKey(id), JSON.stringify(pitch), { expirationTtl: 60 * 60 * 30 });
+}
+const pitchTopic = desk => desk.builtin ? (CATS[desk.id] ? CATS[desk.id].label : desk.label) : (desk.topic || desk.label);
+
+async function fetchPitch(env, desk) {
+  const prompt = `Use web search to find the single most interesting, genuinely newsworthy story RIGHT NOW about: "${pitchTopic(desk)}". ${ukRule} Lead with substance over filler; no clickbait. Return ONLY a JSON object: {"title":"the headline","blurb":"<=16 words on why it's worth a look","source":"publication","url":"url"}`;
+  for (let a = 0; a < 2; a++) {
+    const { text, error } = await callClaude(env, prompt);
+    if (error) continue;
+    const p = extractJSON(text);
+    if (p && p.title) return { title: String(p.title), blurb: p.blurb ? String(p.blurb) : "", source: p.source ? String(p.source) : "", url: p.url ? String(p.url) : "", at: new Date().toISOString() };
+  }
+  return null;
+}
+async function fillPitches(env, desks) {
+  for (let i = 0; i < desks.length; i += 6) {
+    await Promise.all(desks.slice(i, i + 6).map(async d => { const p = await fetchPitch(env, d); if (p) await putPitch(env, d.id, p); }));
+  }
+}
+function catalogueDesks() {
+  const out = [];
+  CATALOGUE.forEach(g => g.desks.forEach(d => out.push(d)));
+  return out;
+}
+function locationDesk(cf) {
+  const city = cf && cf.city ? String(cf.city) : null;
+  const region = cf && cf.region ? String(cf.region) : null;
+  const country = cf && cf.country ? String(cf.country) : null;
+  if (!city && !region) return null;
+  const label = city || region;
+  const where = [city, region].filter(Boolean).join(", ");
+  return { id: "loc-" + slug(label), label: `${label} & local`, location: true,
+    topic: `local news for ${where}${country ? ` (${country})` : ""} — councils, transport, community, business and what affects daily life` };
+}
+async function catalogueResponse(env, request, ctx) {
+  const loc = locationDesk(request.cf || {});
+  const groups = CATALOGUE.map(g => ({ name: g.name, desks: g.desks.map(d => ({ ...d })) }));
+  const all = []; groups.forEach(g => g.desks.forEach(d => all.push(d)));
+  if (loc) all.push(loc);
+  const missing = [];
+  for (const d of all) {
+    const p = await getPitch(env, d.id);
+    if (p) d.pitch = { title: p.title, blurb: p.blurb, source: p.source, url: p.url };
+    else missing.push(d);
+  }
+  if (missing.length && ctx) ctx.waitUntil(fillPitches(env, missing.slice(0, 10)));
+  return { location: loc || null, groups };
+}
+async function deskPreview(env, topic) {
+  topic = String(topic || "").slice(0, 200).trim();
+  if (!topic) return null;
+  const prompt = `For a personal news app, design a desk dedicated to: "${topic}".
+First invent a persona for the desk: a short evocative name, an MBTI type, and a one-line description of its writing voice (a distinctive columnist register). ${ukRule}
+Then use web search to fetch ONE current, genuinely newsworthy sample story for this desk, written in that voice.
+Return ONLY a JSON object: {"label":"short desk name (<=24 chars)","persona":"Name · MBTI","voice":"one-line voice description","types":["3-6 short content-type tags"],"sample":{"title":"headline","summary":"<=24 words in the desk's voice","why":"why it matters","source":"publication","url":"url"}}`;
+  for (let a = 0; a < 2; a++) {
+    const { text, error } = await callClaude(env, prompt);
+    if (error) continue;
+    const p = extractJSON(text);
+    if (p && p.label && p.sample) return p;
+  }
+  return null;
+}
+
 // ---- Sign in with Apple (optional; enabled only when configured) ---------
 // Pure sign-in: we verify the identity token Apple returns in the form_post,
 // so no .p8 / client-secret signing is needed — just the Services ID (aud)
@@ -554,6 +661,23 @@ export default {
       h.append("Set-Cookie", `sess=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0`);
       return new Response(null, { status: 302, headers: h });
     }
+    // Apple domain-ownership verification file (set APPLE_DOMAIN_ASSOCIATION).
+    if (url.pathname === "/.well-known/apple-developer-domain-association.txt" && env.APPLE_DOMAIN_ASSOCIATION) {
+      return new Response(env.APPLE_DOMAIN_ASSOCIATION, { headers: { "content-type": "text/plain" } });
+    }
+
+    if (url.pathname === "/api/catalogue") {
+      try { return json(await catalogueResponse(env, request, ctx)); }
+      catch (e) { return json({ error: "catalogue failed", detail: String(e) }, 500); }
+    }
+    if (url.pathname === "/api/desk-preview" && request.method === "POST") {
+      try {
+        let body = {}; try { body = await request.json(); } catch (_) {}
+        const preview = await deskPreview(env, body.topic);
+        if (!preview) return json({ error: "Couldn't build a preview — try rewording the topic." }, 502);
+        return json(preview);
+      } catch (e) { return json({ error: "preview failed", detail: String(e) }, 500); }
+    }
 
     if (url.pathname === "/api/today") {
       try {
@@ -613,6 +737,8 @@ export default {
           }
         } catch (_) {}
       }
+      // Refresh onboarding pitches once a day (morning run only) to bound cost.
+      if (londonSlot() === "morning") { try { await fillPitches(env, catalogueDesks()); } catch (_) {} }
     })());
   },
 };

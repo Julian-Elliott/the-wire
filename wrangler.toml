@@ -41,3 +41,6 @@ custom_domain = true
 # [vars]
 # APPLE_CLIENT_ID = "business.databased.desk"   # your Services ID
 # APPLE_REDIRECT_URI = "https://desk.databased.business/auth/apple/callback"
+# Paste the contents of Apple's domain-verification file so the Worker serves it
+# at /.well-known/apple-developer-domain-association.txt :
+# APPLE_DOMAIN_ASSOCIATION = "...file contents..."
