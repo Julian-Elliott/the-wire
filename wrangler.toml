@@ -1,0 +1,23 @@
+name = "jacks-wire"
+main = "src/worker.js"
+compatibility_date = "2026-06-01"
+
+# Serve the static frontend in ./public; the Worker handles /api/* and the cron.
+[assets]
+directory = "./public"
+binding = "ASSETS"
+
+# Run the morning briefing once a day. Time is UTC.
+# "0 6 * * *"  = 06:00 UTC daily (07:00 UK in summer / 06:00 in winter).
+[triggers]
+crons = ["0 6 * * *"]
+
+# Workers KV stores the generated briefing (one shared copy).
+# Namespace "WIRE_KV" was created in the Cloudflare account; its id is below.
+[[kv_namespaces]]
+binding = "WIRE_KV"
+id = "d83154c6f90442f7a287cc1cd8938e80"
+
+# Optional: override the model. Defaults to claude-sonnet-4-6 in the Worker.
+# [vars]
+# MODEL = "claude-sonnet-4-6"
