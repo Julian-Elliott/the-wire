@@ -839,6 +839,20 @@ export default {
         // the client show the per-desk report instead of spinning forever.
         const fresh = cached && cached.date === londonDate() && cached.generatedAt;
         if (fresh) return json(cached);
+        // When the routine owns generation, never trigger a metered API build
+        // here (that's what was caching the "credit balance too low" errors).
+        // A personalised feed nudges the routine to build it (throttled); the
+        // shared feed is populated by the routine's schedule + refresh.
+        const useRoutine = String(env.FEED_SOURCE || "").toLowerCase() === "routine";
+        if (useRoutine && routineFireConfigured(env)) {
+          if (t.key !== "shared") {
+            ctx.waitUntil(fireRoutine(env, {
+              text: personalisedFireText(t.key.slice(2), t.profile),
+              rateKey: `routine:last_fire:${t.key}`,
+            }));
+          }
+          return json(cached && cached.items?.length ? { ...cached, generating: true } : generatingShell());
+        }
         ctx.waitUntil(startBuild(env, t.key, t.profile, t.writeKeys));
         return json(cached && cached.items?.length ? { ...cached, generating: true } : generatingShell());
       } catch (e) { return json({ error: "generation failed", detail: String(e) }, 500); }
