@@ -500,7 +500,13 @@ async function fireRoutine(env, opts) {
     const last = Number(await env.WIRE_KV.get(rateKey)) || 0;
     const since = nowSec - last;
     if (last && since < minInterval) return { ok: true, throttled: true, retryInSec: minInterval - since };
+    // Claim the throttle slot BEFORE firing so two near-simultaneous callers
+    // don't both pass the check and double-fire (wasting daily quota). KV has no
+    // compare-and-set, so a sub-second race window remains — acceptable here.
+    // Rolled back below if the fire itself fails, so a failure stays retryable.
+    await env.WIRE_KV.put(rateKey, String(nowSec), { expirationTtl: 86400 });
   }
+  const releaseSlot = async () => { if (env.WIRE_KV) { try { await env.WIRE_KV.delete(rateKey); } catch (_) {} } };
   const text = opts.text || `On-demand shared-feed refresh at ${new Date().toISOString()}. Re-run the briefing and POST it to /api/ingest.`;
   let res;
   try {
@@ -514,10 +520,9 @@ async function fireRoutine(env, opts) {
       },
       body: JSON.stringify({ text }),
     });
-  } catch (e) { return { ok: false, error: "network error" }; }
+  } catch (e) { await releaseSlot(); return { ok: false, error: "network error" }; }
   let data = {}; try { data = await res.json(); } catch (_) {}
-  if (!res.ok) return { ok: false, error: (data && data.error && data.error.message) || `HTTP ${res.status}` };
-  if (env.WIRE_KV) await env.WIRE_KV.put(rateKey, String(nowSec), { expirationTtl: 86400 });
+  if (!res.ok) { await releaseSlot(); return { ok: false, error: (data && data.error && data.error.message) || `HTTP ${res.status}` }; }
   return { ok: true, fired: true, session: data.claude_code_session_url || null };
 }
 
@@ -525,10 +530,14 @@ async function fireRoutine(env, opts) {
 // personalised desks and ingest them into that user's feed. The routine prompt
 // branches on the "PERSONALISED BUILD REQUEST" marker. See routines/briefing-prompt.md.
 function personalisedFireText(uid, profile) {
+  // Custom desk label/topic/types are user-controlled free text. Flatten
+  // newlines + quotes and clamp length so a crafted desk can't break out of the
+  // instruction frame the (privileged, owner-account) routine executes.
+  const safe = s => String(s == null ? "" : s).replace(/[\r\n"]+/g, " ").trim().slice(0, 200);
   const lines = deskList(profile).map(d =>
-    `- category=${d.id} | desk="${d.label}"` +
-    (d.builtin ? " (built-in)" : ` | topic="${d.topic}"`) +
-    ` | types=${(d.types || []).join(",")}`,
+    `- category=${safe(d.id)} | desk="${safe(d.label)}"` +
+    (d.builtin ? " (built-in)" : ` | topic="${safe(d.topic)}"`) +
+    ` | types=${(d.types || []).map(safe).join(",")}`,
   ).join("\n");
   return [
     "PERSONALISED BUILD REQUEST — ignore the shared desk table; build ONLY the desks below for this one user.",
@@ -576,6 +585,11 @@ async function ingestBriefing(env, payload, target) {
     : CAT_ORDER.map(id => ({ id, label: CATS[id].label, builtin: true }));
   const labelOf = id => { const b = baseDesks.find(d => d.id === id); return (b && b.label) || (CATS[id] && CATS[id].label) || id; };
 
+  // Read-modify-write into KV (no transaction/CAS): two ingests landing on the
+  // same feed within the same instant could each read `existing`, merge, and the
+  // later write would clobber the earlier's stories. Accepted at this scale —
+  // the per-target fire throttle (≥900s) makes concurrent same-feed ingests rare;
+  // a hard fix would need a Durable Object, unjustified for a one-owner app.
   let prior = [];
   const existing = await readJSON(env, writeKeys.latest);
   if (existing && existing.date === londonDate() && Array.isArray(existing.items)) prior = existing.items;
@@ -767,6 +781,12 @@ export default {
       return json({ appleEnabled: appleEnabled(env), signedIn: !!s, email: (s && s.email) || null, name: (s && s.name) || null });
     }
     if (url.pathname === "/api/profile" && request.method === "GET") {
+      // Access is bound to the caller's identity: a signed-in session reads only
+      // its own profile (headerUid = sUid || queryUid → sUid wins, so a client
+      // ?u=/x-user-id can't target another id). For anonymous users the 128-bit
+      // uid IS the capability (no accounts); Apple ids are unreachable here
+      // because cleanUid rejects them as queryUid. The client sends the anon uid
+      // via the x-user-id header (not the URL) to avoid leaking it in logs/Referer.
       const u = headerUid;
       return json({ profile: u ? await readJSON(env, profileKey(u)) : null });
     }
@@ -844,23 +864,27 @@ export default {
         const useRoutine = String(env.FEED_SOURCE || "").toLowerCase() === "routine";
         const hasItems = !!(cached && cached.items && cached.items.length);
         // A completed build for today is normally fresh even with zero items.
-        // But in routine mode a zero-item feed is a stale *failure* (e.g. the old
-        // metered-API "credit balance" errors that completed with no stories) —
-        // treat it as not-fresh so the routine rebuilds and the errors clear.
+        // In routine mode, a zero-item feed is only a stale *failure* when it is
+        // NOT a completed routine build (the old metered-API "credit balance"
+        // errors carry no `source`). A routine that legitimately returned nothing
+        // (source:"routine") is fresh — don't re-fire it all day on a quiet day.
         const fresh = cached && cached.date === londonDate() && cached.generatedAt
-          && !(useRoutine && !hasItems);
+          && !(useRoutine && !hasItems && cached.source !== "routine");
         if (fresh) return json(cached);
         // When the routine owns generation, never trigger a metered API build
-        // here. A personalised feed nudges the routine (throttled); the shared
-        // feed is populated by the routine's schedule + refresh.
+        // here. Only the signed-in OWNER may spend a routine run on their
+        // personalised feed (so anon/cross-user callers can't drain the daily
+        // cap); the shared feed is populated by the routine's schedule + refresh.
         if (useRoutine && routineFireConfigured(env)) {
-          if (t.key !== "shared") {
-            ctx.waitUntil(fireRoutine(env, {
+          let refresh;
+          if (t.key !== "shared" && sUid && t.key === "u:" + sUid) {
+            refresh = await fireRoutine(env, {
               text: personalisedFireText(t.key.slice(2), t.profile),
               rateKey: `routine:last_fire:${t.key}`,
-            }));
+            });
           }
-          return json(hasItems ? { ...cached, generating: true } : generatingShell());
+          const base = hasItems ? { ...cached, generating: true } : generatingShell();
+          return json(refresh ? { ...base, refresh } : base);
         }
         ctx.waitUntil(startBuild(env, t.key, t.profile, t.writeKeys));
         return json(hasItems ? { ...cached, generating: true } : generatingShell());
@@ -876,7 +900,12 @@ export default {
         // the shared feed AND a signed-in user's personalised desks (the routine
         // is told which desks + which user to build, throttled per target).
         const useRoutine = String(env.FEED_SOURCE || "").toLowerCase() === "routine";
-        if (useRoutine && routineFireConfigured(env)) {
+        // Shared fire is open to anyone (bounded by one global throttle key); a
+        // personalised fire requires the signed-in OWNER, so an attacker can't
+        // drain the routine's daily cap via spoofed/varied userIds. A non-owner
+        // personalised request falls through to the metered build path.
+        const ownsPersonalised = t.key !== "shared" && sUid && t.key === "u:" + sUid;
+        if (useRoutine && routineFireConfigured(env) && (t.key === "shared" || ownsPersonalised)) {
           const refresh = t.key === "shared"
             ? await fireRoutine(env, {})
             : await fireRoutine(env, {
@@ -917,6 +946,10 @@ export default {
     if (url.pathname === "/api/profile" && (request.method === "PUT" || request.method === "POST")) {
       try {
         let body = {}; try { body = await request.json(); } catch (_) {}
+        // Writes are bound to the caller: a signed-in session always writes its
+        // own profile (sUid wins; body.userId is ignored), so it can't overwrite
+        // another user's. Anonymous writes are keyed by the caller's own uid
+        // (the capability). cleanUid keeps anon ids to the safe charset.
         const u = sUid || cleanUid(body.userId);
         if (!u) return json({ error: "missing or invalid userId" }, 400);
         const profile = sanitizeProfile(body.profile);

@@ -314,7 +314,7 @@ function adoptServerProfile(sp){
   saveProfile();
 }
 async function loadServerProfile(){
-  try{ const r = await fetch("/api/profile?u="+encodeURIComponent(state.uid)); const d = await r.json();
+  try{ const r = await fetch("/api/profile", { headers:{ "x-user-id": state.uid } }); const d = await r.json();
     if(d && d.profile) adoptServerProfile(d.profile);
   }catch(_){}
 }
@@ -332,29 +332,34 @@ function syncDesks(){ // desk set changed → regenerate, then poll for the new 
 async function fetchData(force){
   const res = force
     ? await fetch("/api/refresh", { method:"POST", headers:{"content-type":"application/json"}, body: JSON.stringify({ userId: state.uid }) })
-    : await fetch("/api/today?u="+encodeURIComponent(state.uid));
+    : await fetch("/api/today", { headers:{ "x-user-id": state.uid } });
   return res.json();
 }
 function applyData(data){ state.data = data; hydrateRead(data.date); if(data.items && data.items.length) markSeen(); }
 const isBuilding = d => d && d.generating && (!d.items || !d.items.length);
 
 async function load(force){
-  clearTimeout(window.__poll);
-  state.loading = true; state.error = null; render();
+  clearTimeout(window.__poll); window.__pollN = 0;
+  state.loading = true; state.error = null; state.cooldown = null; render();
   try{
     const data = await fetchData(force);
     if (data.error) throw new Error(data.detail || data.error);
     applyData(data);
+    state.cooldown = (data.refresh && data.refresh.throttled) ? (data.refresh.retryInSec || 0) : null;
     if (isBuilding(data)){ window.__poll = setTimeout(poll, 4000); }
     else state.loading = false;
   }catch(e){ state.error = String(e.message || e); state.loading = false; }
   render();
 }
 async function poll(){
+  // Bound the poll so a stuck/throttled build can't spin the loader forever
+  // (~3 min): after that, show whatever's cached and let the user refresh.
+  if ((window.__pollN = (window.__pollN || 0) + 1) > 45){ state.loading = false; render(); return; }
   try{
     const data = await fetchData(false);
     if(!data.error){
       applyData(data);
+      state.cooldown = (data.refresh && data.refresh.throttled) ? (data.refresh.retryInSec || 0) : null;
       if(isBuilding(data)) window.__poll = setTimeout(poll, 4000);
       else state.loading = false;
     } else { window.__poll = setTimeout(poll, 5000); }
@@ -554,7 +559,11 @@ function render(){
   if(!toks.length) toks.push({t: building ? "Building your briefing…" : "Loading the wire…", c:"var(--muted)"});
   const tickerHtml = [...toks,...toks].map(tk=>`<span class="tok"><span class="tok-dot" style="background:${tk.c}"></span><span style="color:${tk.c}">${esc(tk.t)}</span></span>`).join("");
 
-  const sumLine = building ? "Building your briefing — pulling every desk live. About 30–60 seconds…"
+  const cooldownNote = state.cooldown != null
+    ? `Updating shortly — on cooldown${state.cooldown > 60 ? ` (~${Math.ceil(state.cooldown/60)} min)` : ""}.`
+    : null;
+  const sumLine = cooldownNote ? cooldownNote
+    : building ? "Building your briefing — pulling every desk live. About 30–60 seconds…"
     : state.loading ? "Updating your briefing…"
     : total ? order.filter(k=>c[k]).map(k=>`${c[k]} ${cat(k).label.toLowerCase()}`).join(" · ")
     : "Nothing in the tray yet.";
