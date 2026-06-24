@@ -21,6 +21,13 @@ crons = ["0 6 * * *", "0 12 * * *", "0 18 * * *"]
 binding = "WIRE_KV"
 id = "d83154c6f90442f7a287cc1cd8938e80"
 
+# R2 bucket for generated audio (per-item read-outs; podcast later). The Worker
+# renders via ElevenLabs lazily on first play and caches the MP3 here. The
+# ELEVENLABS_API_KEY is an encrypted secret (wrangler secret put — NOT here).
+[[r2_buckets]]
+binding = "WIRE_AUDIO"
+bucket_name = "wire-audio"
+
 # Custom domain. Cloudflare auto-creates the DNS record and provisions TLS for
 # this hostname on deploy (the zone databased.business must be in this account).
 [[routes]]

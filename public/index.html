@@ -164,6 +164,9 @@ a{ color:inherit; text-decoration:none; }
 .type{ font-size:11px; color:var(--muted); border:1px solid var(--line); border-radius:6px; padding:1px 7px; }
 .move{ font-family:'JetBrains Mono',monospace; font-size:12px; font-weight:700; }
 .src{ font-family:'JetBrains Mono',monospace; font-size:10.5px; color:var(--faint); }
+.listen{ margin-left:auto; flex-shrink:0; display:inline-flex; align-items:center; justify-content:center; width:26px; height:26px; border-radius:50%; border:1px solid var(--line); background:transparent; color:var(--muted); font-size:10px; cursor:pointer; padding:0; }
+.listen:hover, .listen.playing{ color:var(--amber); border-color:var(--amber); }
+.listen.loading{ opacity:.6; }
 
 .skeletons{ display:flex; flex-direction:column; gap:12px; }
 .sk{ height:104px; border-radius:13px; border:1px solid var(--line); background:linear-gradient(100deg, var(--panel) 30%, var(--panel2) 50%, var(--panel) 70%); background-size:200% 100%; animation:sheen 1.4s ease-in-out infinite; }
@@ -702,6 +705,7 @@ function render(){
           <span class="type">${esc(it.contentType)}</span>
           ${it.changePct?`<span class="move" style="color:${dirCol}">${arrow} ${esc(it.changePct)}</span>`:""}
           <span class="src">${esc(it.source || domainOf(it.url) || "—")}</span>
+          <button class="listen" data-listen="${esc(it.id)}" type="button" aria-label="Listen to this">▶</button>
         </div>
       </article>`;
     }).join("");
@@ -820,6 +824,27 @@ function deskRowHtml(id, builtin){
   </div>`;
 }
 
+// ---- per-item "listen" audio (one shared player) -------------------------
+let _audio=null, _audioId=null;
+function syncListenUI(){
+  document.querySelectorAll(".listen").forEach(b=>{
+    const id=b.getAttribute("data-listen"); const active=_audio&&_audioId===id;
+    const playing=!!(active&&!_audio.paused&&!_audio.ended);
+    const loading=!!(active&&!_audio.paused&&_audio.readyState<3&&!_audio.ended);
+    b.classList.toggle("playing",playing); b.classList.toggle("loading",loading);
+    b.textContent = loading ? "…" : (playing ? "⏸" : "▶");
+  });
+}
+function toggleListen(id){
+  if(_audio && _audioId===id){ _audio.paused ? _audio.play() : _audio.pause(); syncListenUI(); return; }
+  if(_audio){ try{ _audio.pause(); }catch(_){} }
+  _audio = new Audio(`/api/listen/${encodeURIComponent(id)}?u=${encodeURIComponent(state.uid)}`);
+  _audioId = id;
+  ["playing","pause","ended","error","waiting","canplay","loadstart"].forEach(ev=> _audio.addEventListener(ev, syncListenUI));
+  _audio.play().catch(()=> syncListenUI());
+  syncListenUI();
+}
+
 // ---- event wiring (incl. swipe gestures) ---------------------------------
 function wire(){
   const $ = s => document.getElementById(s);
@@ -852,6 +877,8 @@ function wire(){
     if(open) pop.removeAttribute("hidden"); else pop.setAttribute("hidden","");
     b.setAttribute("aria-expanded", open ? "true" : "false");
   });
+  document.querySelectorAll(".listen").forEach(b=> b.onclick = (e)=>{ e.stopPropagation(); toggleListen(b.getAttribute("data-listen")); });
+  syncListenUI();
   document.querySelectorAll("[data-restore]").forEach(b=> b.onclick = ()=> restoreType(b.dataset.restore));
 
   document.querySelectorAll(".card[data-id], .card[data-onboard]").forEach(card=>{

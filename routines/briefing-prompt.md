@@ -37,6 +37,10 @@ Rules for every item:
   opinion/comment columns, culture-war or outrage pieces, ragebait, clickbait,
   rumour-mill churn, and anything that's mostly someone whinging. No ads.
 - `summary` ≤ 24 words. `why` = why this reader should care.
+- `readout` = a longer-form spoken version for the desk's audio "listen" button:
+  **3–6 natural sentences** (~60–120 words) that a presenter would read aloud —
+  the story with a bit more context and the so-what, in plain spoken British
+  English. No markdown, no headings, no URLs; just speakable prose.
 - Always include a real `source` (publication) and `url` (link to the story).
 
 The desks (use the `category` id exactly as given):

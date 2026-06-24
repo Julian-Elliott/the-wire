@@ -588,6 +588,45 @@ function personalisedFireText(uid, profile) {
   ].join("\n");
 }
 
+// ---- audio (per-item "listen" read-outs, ElevenLabs → R2 cache) ----------
+// Per-desk read-out voices (real voice_ids from the account). Custom desks and
+// anything unmapped use _default. British-leaning, all distinct.
+const VOICE_MAP = {
+  liverpool: "JBFqnCBsd6RMkjVDRZzb", // George — warm British storyteller
+  worcester: "onwK4e9ZLuTAKqWW03F9", // Daniel — steady British broadcaster
+  gaming:    "TX3LPaxmHKxFdv7VOQHJ", // Liam — energetic creator
+  ev:        "G17SuINrv2H9FC6nvetn", // Christopher — gentle, trustworthy (British)
+  markets:   "RILOU7YmBhvwJGDGjNmP", // Jane — professional reader (British)
+  world:     "nPczCjzI2devNBz1zQrb", // Brian — deep, resonant, authoritative
+  _default:  "SAz9YHcvj6GT2YYXdXww", // River — relaxed, neutral, informative
+};
+const voiceFor = cat => VOICE_MAP[cat] || VOICE_MAP._default;
+
+// What gets read aloud: the routine's longer-form `readout` if present, else a
+// sensible fallback from title + summary + why (so it works before the routine
+// adds read-outs).
+function readoutText(it) {
+  if (it && it.readout && String(it.readout).trim().length > 40) return String(it.readout).trim().slice(0, 4000);
+  return [it && it.title, it && it.summary, it && it.why].filter(Boolean).map(String).join(". ").trim().slice(0, 4000);
+}
+
+async function sha16(text) {
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, "0")).join("").slice(0, 16);
+}
+
+// Render one read-out to MP3 bytes via ElevenLabs Flash (cheap; cached so latency
+// only hits the first listener of each item).
+async function ttsRender(env, text, voiceId) {
+  const res = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?output_format=mp3_44100_128`, {
+    method: "POST",
+    headers: { "xi-api-key": env.ELEVENLABS_API_KEY, "content-type": "application/json" },
+    body: JSON.stringify({ model_id: "eleven_flash_v2_5", text }),
+  });
+  if (!res.ok) { const e = await res.text().catch(() => ""); throw new Error(`elevenlabs ${res.status}: ${e.slice(0, 200)}`); }
+  return new Uint8Array(await res.arrayBuffer());
+}
+
 // Trust the desk id supplied per item; assign our own ids and clamp lengths.
 function normalizeIngest(items) {
   return (items || [])
@@ -598,6 +637,7 @@ function normalizeIngest(items) {
       title: String(x.title).slice(0, 240),
       summary: x.summary ? String(x.summary).slice(0, 400) : "",
       why: x.why ? String(x.why).slice(0, 400) : "",
+      readout: x.readout ? String(x.readout).slice(0, 1800) : "",
       contentType: x.contentType ? String(x.contentType).slice(0, 40) : "News",
       source: x.source ? String(x.source).slice(0, 120) : "",
       url: x.url ? String(x.url).slice(0, 600) : "",
@@ -891,6 +931,32 @@ export default {
         if (!preview) return json({ error: "Couldn't build a preview — try rewording the topic." }, 502);
         return json(preview);
       } catch (e) { return json({ error: "preview failed", detail: String(e) }, 500); }
+    }
+
+    // Per-item read-out audio. Lazily rendered via ElevenLabs on first play and
+    // cached in R2 (content-addressed), so each item costs one render total and
+    // an unauth caller can't burn credits on arbitrary text (text comes from the
+    // feed). GET /api/listen/<itemId> — the client passes its uid via x-user-id.
+    if (url.pathname.startsWith("/api/listen/") && request.method === "GET") {
+      if (!env.ELEVENLABS_API_KEY || !env.WIRE_AUDIO) return json({ error: "audio not configured" }, 404);
+      try {
+        const itemId = decodeURIComponent(url.pathname.slice("/api/listen/".length));
+        if (!itemId) return json({ error: "missing item id" }, 400);
+        const t = await resolveTarget(env, headerUid);
+        let feed = await readJSON(env, t.writeKeys.latest);
+        let item = feed && Array.isArray(feed.items) ? feed.items.find(i => i.id === itemId) : null;
+        if (!item && t.key !== "shared") { const sh = await readJSON(env, SHARED_KEY); item = sh && Array.isArray(sh.items) ? sh.items.find(i => i.id === itemId) : null; }
+        if (!item) return json({ error: "item not found (feed may have refreshed)" }, 404);
+        const text = readoutText(item);
+        if (!text || text.length < 8) return json({ error: "nothing to read" }, 422);
+        const voiceId = voiceFor(item.category);
+        const key = `listen/${itemId}/${voiceId}/${await sha16(text)}.mp3`;
+        const hit = await env.WIRE_AUDIO.get(key);
+        if (hit) return new Response(hit.body, { headers: { "content-type": "audio/mpeg", "cache-control": "public, max-age=86400" } });
+        const bytes = await ttsRender(env, text, voiceId);
+        ctx.waitUntil(env.WIRE_AUDIO.put(key, bytes, { httpMetadata: { contentType: "audio/mpeg" } }));
+        return new Response(bytes, { headers: { "content-type": "audio/mpeg", "cache-control": "public, max-age=86400" } });
+      } catch (e) { return json({ error: "audio render failed", detail: String(e) }, 502); }
     }
 
     if (url.pathname === "/api/today") {
