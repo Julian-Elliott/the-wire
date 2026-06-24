@@ -660,7 +660,7 @@ function render(){
   const sumLine = cooldownNote ? cooldownNote
     : building ? "Building your briefing — researching every desk live. This can take several minutes…"
     : state.loading ? "Updating your briefing…"
-    : total ? order.filter(k=>c[k]).map(k=>`${c[k]} ${cat(k).label.toLowerCase()}`).join(" · ")
+    : total ? ""
     : "Nothing in the tray yet.";
 
   const filterBtns = [`<button class="fil ${state.filter==="all"?"on":""}" style="${state.filter==="all"?"background:var(--amber);border-color:var(--amber)":""}" data-filter="all">All <span class="cnt">${total}</span></button>`]
@@ -776,7 +776,7 @@ function render(){
     </header>
     <div class="ticker" aria-hidden="true"><div class="ticker-track">${tickerHtml}</div></div>
     ${settingsHtml}
-    <section class="hero"><h2 class="hello">${greeting()}${state.auth.name?`, ${esc(state.auth.name)}`:""}.</h2><p class="sum">${esc(sumLine)}${nNew?` · <span style="color:var(--amber)">${nNew} new</span>`:""}</p></section>
+    <section class="hero"><h2 class="hello">${greeting()}${state.auth.name?`, ${esc(state.auth.name)}`:""}.</h2><p class="sum">${esc(sumLine)}${nNew?`${sumLine?" · ":""}<span style="color:var(--amber)">${nNew} new</span>`:""}</p></section>
     <nav class="filters">${filterBtns}</nav>
     <main class="feed">${onboardHtml}${feedHtml}</main>
     <footer class="foot">British English, £, no ads, no comment columns. Your desks, each with its own voice — swipe to tune them. Refreshed through the day, newest at the top.${pulled}</footer>
