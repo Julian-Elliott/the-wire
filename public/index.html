@@ -92,6 +92,8 @@ a{ color:inherit; text-decoration:none; }
 .preview-sample{ border-top:1px dashed var(--line); margin-top:8px; padding-top:9px; }
 .setup-foot{ position:fixed; left:0; right:0; bottom:0; z-index:15; display:flex; gap:12px; align-items:center; justify-content:center; padding:12px 20px calc(12px + env(safe-area-inset-bottom)); background:linear-gradient(transparent, var(--ink) 30%); }
 .setup-foot .refresh{ min-width:200px; height:40px; }
+.setup-signin{ color:var(--amber); text-decoration:none; }
+.setup-signin:hover{ text-decoration:underline; }
 
 .desk{ border:1px solid var(--line); border-radius:11px; padding:10px 12px; margin-bottom:8px; background:var(--panel2); }
 .desk.off{ opacity:.5; }
@@ -507,6 +509,7 @@ function renderPicker(){
         <div class="eyebrow">Build your wire</div>
         <h1>${greeting()}. Let’s build your wire.</h1>
         <p>Tap the desks you want — each is auditioning with its best story right now. See your team or topic missing? <strong style="color:var(--amber)">Add your own</strong> in any section and watch it design itself.</p>
+        ${state.auth.enabled && !state.auth.signedIn ? `<p>Already have an account? <a href="/auth/apple/login" class="setup-signin">Sign in</a> to restore your feed.</p>` : ''}
       </div>
       ${loc}${groups}
     </div>
