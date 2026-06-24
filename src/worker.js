@@ -324,9 +324,18 @@ const itemKey = it => (it.url && String(it.url).trim())
   ? "u:" + String(it.url).trim().toLowerCase()
   : "t:" + it.category + "|" + normTitle(it.title);
 function mergeItems(prior, fresh) {
-  const seen = new Set(); const out = [];
-  for (const it of fresh) { const k = itemKey(it); if (seen.has(k)) continue; seen.add(k); out.push(it); }
-  for (const it of prior) { const k = itemKey(it); if (seen.has(k)) continue; seen.add(k); out.push(it); }
+  // Collapse repeats by EITHER the link OR the desk+headline, so the same story
+  // told by two outlets (different URLs, same title — e.g. three "FTSE 100"
+  // cards) shows once. Fresh wins over prior (newest copy kept).
+  const seenUrl = new Set(), seenTitle = new Set(); const out = [];
+  const take = it => {
+    const u = (it.url && String(it.url).trim()) ? "u:" + String(it.url).trim().toLowerCase() : null;
+    const tk = "t:" + it.category + "|" + normTitle(it.title);
+    if ((u && seenUrl.has(u)) || seenTitle.has(tk)) return false;
+    if (u) seenUrl.add(u); seenTitle.add(tk); return true;
+  };
+  for (const it of fresh) { if (take(it)) out.push(it); }
+  for (const it of prior) { if (take(it)) out.push(it); }
   const per = {}; const capped = [];
   for (const it of out) { const n = per[it.category] = (per[it.category] || 0) + 1; if (n <= DAILY_CAP_PER_DESK) capped.push(it); }
   capped.sort((a, b) => String(b.addedAt || "").localeCompare(String(a.addedAt || "")));
