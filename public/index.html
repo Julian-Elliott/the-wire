@@ -143,13 +143,13 @@ a{ color:inherit; text-decoration:none; }
 .h{ font-family:'Bricolage Grotesque',sans-serif; font-weight:700; font-size:18px; line-height:1.22; margin:0 0 7px; letter-spacing:-.01em; }
 .h a:hover{ color:var(--amber); }
 .p{ margin:0 0 9px; font-size:14px; line-height:1.5; color:#cfcabd; }
-/* "Why it matters" is tucked behind a small hoverable/tappable "i". */
-.why{ position:relative; display:inline-flex; outline:none; }
-.why-i{ display:inline-flex; align-items:center; justify-content:center; width:16px; height:16px; border-radius:50%; border:1px solid var(--line); color:var(--faint); font-family:'JetBrains Mono',monospace; font-size:10px; font-style:italic; cursor:help; user-select:none; }
-.why:hover .why-i, .why:focus .why-i, .why:focus-within .why-i{ color:var(--amber); border-color:var(--amber); }
-.why-pop{ display:none; position:absolute; bottom:130%; left:0; z-index:5; width:min(260px,72vw); background:var(--panel); border:1px solid var(--line); border-radius:9px; padding:8px 11px; font-size:12.5px; line-height:1.45; color:var(--muted); box-shadow:0 8px 24px rgba(0,0,0,.35); }
-.why-pop b{ display:block; font-family:'JetBrains Mono',monospace; font-size:9px; letter-spacing:.16em; text-transform:uppercase; color:var(--amber); margin-bottom:4px; font-weight:600; }
-.why:hover .why-pop, .why:focus .why-pop, .why:focus-within .why-pop{ display:block; }
+/* "Why it matters" is a small "i" that uncollapses an inline section in the card
+   (the card just grows — no clipping by .card overflow:hidden). */
+.why-i{ display:inline-flex; align-items:center; justify-content:center; width:17px; height:17px; border-radius:50%; border:1px solid var(--line); background:transparent; color:var(--faint); font-family:'JetBrains Mono',monospace; font-size:10px; font-style:italic; cursor:pointer; user-select:none; padding:0; }
+.why-i:hover, .why-i[aria-expanded="true"]{ color:var(--amber); border-color:var(--amber); }
+.why-pop{ margin:2px 0 10px; font-size:12.5px; line-height:1.45; color:var(--muted); border-top:1px dashed var(--line); padding-top:8px; }
+.why-pop[hidden]{ display:none; }
+.why-pop b{ font-family:'JetBrains Mono',monospace; font-size:9px; letter-spacing:.16em; text-transform:uppercase; color:var(--amber); margin-right:7px; font-weight:600; }
 .card-foot{ display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
 .type{ font-size:11px; color:var(--muted); border:1px solid var(--line); border-radius:6px; padding:1px 7px; }
 .move{ font-family:'JetBrains Mono',monospace; font-size:12px; font-weight:700; }
@@ -216,7 +216,7 @@ const state = {
   profile: loadProfile(),
   data: null, error: null, loading: true, filter: "all",
   showSettings: false, showAddDesk: false, toast: null,
-  read: new Set(), dismissed: new Set(), cooldown: null,
+  read: new Set(), dismissed: new Set(), seen: {}, cooldown: null,
   seenBefore: (function(){ try{ return localStorage.getItem("jackwire:lastseen")||""; }catch(_){ return ""; } })(),
   onboard: (function(){ try{ return localStorage.getItem("jackwire:onboarded")!=="1"; }catch(_){ return true; } })(),
   auth: { enabled:false, signedIn:false, email:null, name:null },
@@ -323,11 +323,24 @@ function addDismissed(it){ const k = itemKeyClient(it); if(!k) return; const m =
 function undoDismissed(it){ const k = itemKeyClient(it); if(!k) return; const m = readDismissMap(); delete m[k]; writeDismissMap(m); state.dismissed.delete(k); }
 state.dismissed = loadDismissed();
 
+// "Already seen" — articles shown in a PRIOR session are hidden so the same
+// story doesn't reappear day-to-day. Recorded on display; filtered only when
+// seen BEFORE this session started, so reloading now never shrinks the feed.
+// Rolling 7 days, per-user (so skipping a day still surfaces that day's news).
+const SEEN_TTL = 7*24*60*60*1000;
+const SESSION_START = Date.now();
+function readSeenMap(){ try{ return JSON.parse(localStorage.getItem("jackwire:seen")||"{}")||{}; }catch(_){ return {}; } }
+function writeSeenMap(m){ try{ localStorage.setItem("jackwire:seen", JSON.stringify(m)); }catch(_){} }
+function loadSeen(){ const m=readSeenMap(), cut=Date.now()-SEEN_TTL, out={}; for(const k in m){ if(m[k]>cut) out[k]=m[k]; } writeSeenMap(out); return out; }
+function recordSeen(items){ if(!Array.isArray(items)||!items.length) return; const m=readSeenMap(), now=Date.now(); for(const it of items){ const k=itemKeyClient(it); if(k) m[k]=now; } writeSeenMap(m); state.seen=m; }
+function seenPrior(it){ const t = state.seen && state.seen[itemKeyClient(it)]; return !!(t && t < SESSION_START); }
+state.seen = loadSeen();
+
 function baseItems(){
   if(!state.data || !state.data.items) return [];
   const disabled = state.profile.desks.disabled||[];
   return state.data.items
-    .filter(i => !state.read.has(i.id) && !state.dismissed.has(itemKeyClient(i)))
+    .filter(i => !state.read.has(i.id) && !state.dismissed.has(itemKeyClient(i)) && !seenPrior(i))
     .filter(i => !disabled.includes(i.category))
     .filter(i => (w()[i.contentType]||0) > MUTE_FLOOR);
 }
@@ -408,7 +421,7 @@ async function fetchData(force){
     : await fetch("/api/today", { headers:{ "x-user-id": state.uid } });
   return res.json();
 }
-function applyData(data){ state.data = data; hydrateRead(data.date); if(data.items && data.items.length) markSeen(); }
+function applyData(data){ state.data = data; hydrateRead(data.date); if(data.items && data.items.length){ markSeen(); recordSeen(data.items); } }
 const isBuilding = d => d && d.generating && (!d.items || !d.items.length);
 
 // A routine refresh takes minutes to land, so lock the Refresh button for ~5 min
@@ -682,11 +695,12 @@ function render(){
         <div class="sw nope">◂ Not for me</div>
         <div class="card-top">
           <span class="cat" style="color:${ac}">${esc(info.label)}</span>
-          ${it.why?`<span class="why" tabindex="0" aria-label="Why it matters"><span class="why-i">i</span><span class="why-pop"><b>Why it matters</b>${esc(it.why)}</span></span>`:""}
+          ${it.why?`<button class="why-i" type="button" aria-expanded="false" aria-label="Why it matters">i</button>`:""}
           ${isNew(it)?`<span class="new-pill">NEW</span>`:""}
         </div>
         <h3 class="h">${titleHtml}</h3>
         ${it.summary?`<p class="p">${esc(it.summary)}</p>`:""}
+        ${it.why?`<div class="why-pop" hidden><b>Why it matters</b>${esc(it.why)}</div>`:""}
         <div class="card-foot">
           <span class="type">${esc(it.contentType)}</span>
           ${it.changePct?`<span class="move" style="color:${dirCol}">${arrow} ${esc(it.changePct)}</span>`:""}
@@ -833,6 +847,13 @@ function wire(){
   document.querySelectorAll(".desk-note").forEach(el=> el.onchange = ()=> setDeskNote(el.getAttribute("data-note"), el.value));
   document.querySelectorAll("[data-up]").forEach(b=> b.onclick = ()=> moveDesk(b.dataset.up, -1));
   document.querySelectorAll("[data-down]").forEach(b=> b.onclick = ()=> moveDesk(b.dataset.down, 1));
+  document.querySelectorAll(".why-i").forEach(b=> b.onclick = (e)=>{
+    e.stopPropagation();
+    const card = b.closest(".card"); const pop = card && card.querySelector(".why-pop"); if(!pop) return;
+    const open = pop.hasAttribute("hidden");
+    if(open) pop.removeAttribute("hidden"); else pop.setAttribute("hidden","");
+    b.setAttribute("aria-expanded", open ? "true" : "false");
+  });
   document.querySelectorAll("[data-restore]").forEach(b=> b.onclick = ()=> restoreType(b.dataset.restore));
 
   document.querySelectorAll(".card[data-id], .card[data-onboard]").forEach(card=>{
