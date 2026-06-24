@@ -367,12 +367,14 @@ function lockRefresh(){ try{ localStorage.setItem("jackwire:refreshlock", String
 
 async function load(force){
   clearTimeout(window.__poll); window.__pollN = 0;
-  if (force) lockRefresh();
   state.loading = true; state.error = null; state.cooldown = null; render();
   try{
     const data = await fetchData(force);
     if (data.error) throw new Error(data.detail || data.error);
     applyData(data);
+    // Only lock Refresh if a routine run actually started — not when throttled
+    // or skipped — so the button doesn't claim "Refreshing…" when nothing ran.
+    if (force && data.refresh && data.refresh.fired) lockRefresh();
     state.cooldown = (data.refresh && data.refresh.throttled) ? (data.refresh.retryInSec || 0) : null;
     if (isBuilding(data)){ window.__poll = setTimeout(poll, 4000); }
     else state.loading = false;
@@ -591,7 +593,7 @@ function render(){
     ? `Updating shortly — on cooldown${state.cooldown > 60 ? ` (~${Math.ceil(state.cooldown/60)} min)` : ""}.`
     : null;
   const sumLine = cooldownNote ? cooldownNote
-    : building ? "Building your briefing — pulling every desk live. About 30–60 seconds…"
+    : building ? "Building your briefing — researching every desk live. This can take several minutes…"
     : state.loading ? "Updating your briefing…"
     : total ? order.filter(k=>c[k]).map(k=>`${c[k]} ${cat(k).label.toLowerCase()}`).join(" · ")
     : "Nothing in the tray yet.";
@@ -722,11 +724,14 @@ function render(){
 
 function deskReport(report){
   if(!report) return "";
+  // Never show a raw provider/billing message as a desk status (cached feeds may
+  // still carry the old "credit balance…" text); collapse it to a neutral note.
+  const cleanStat = s => /credit balance|billing|quota|insufficient|unauthor|rate.?limit|payment|too low|plans ?&/i.test(String(s||"")) ? "temporarily unavailable" : String(s||"");
   const rows = deskOrder().map(k=>{
     const r = report[k]; const info = cat(k); const ok = r && r.status==="ok";
     return `<div class="diag-row"><span class="diag-dot" style="background:${ok?info.accent:"var(--faint)"}"></span>
       <span class="diag-name">${esc(info.label)}</span>
-      <span class="diag-stat" style="color:${ok?"var(--text)":"var(--down)"}">${r?(ok?r.n+" stories":esc(r.status)):"—"}</span></div>`;
+      <span class="diag-stat" style="color:${ok?"var(--text)":"var(--down)"}">${r?(ok?r.n+" stories":esc(cleanStat(r.status))):"—"}</span></div>`;
   }).join("");
   return `<div class="diag"><div class="diag-h">Desk report</div>${rows}</div>`;
 }

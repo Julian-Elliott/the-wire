@@ -221,7 +221,15 @@ async function callClaude(env, prompt) {
   }
   let data;
   try { data = await res.json(); } catch (e) { return { text: "", error: `bad response (${res.status})` }; }
-  if (!res.ok || data?.error) return { text: "", error: data?.error?.message || `HTTP ${res.status}` };
+  if (!res.ok || data?.error) {
+    const raw = (data && data.error && data.error.message) || `HTTP ${res.status}`;
+    // Never surface a raw provider/billing message — it ends up rendered as a
+    // desk "status". Map known upstream failures to a neutral note (the real
+    // message is in the upstream logs anyway).
+    const clean = /credit balance|billing|quota|insufficient|rate.?limit|unauthor|forbidden|payment/i.test(raw)
+      ? "temporarily unavailable" : raw;
+    return { text: "", error: clean };
+  }
   const text = (data.content || []).filter(b => b.type === "text").map(b => b.text).join("\n").trim();
   if (!text) return { text: "", error: data.stop_reason === "max_tokens" ? "no text (length limit)" : "no text returned" };
   return { text, error: null };
@@ -495,18 +503,23 @@ async function fireRoutine(env, opts) {
   // Protect the routine's daily run cap: at most one fire per window per target.
   const minInterval = Number(env.ROUTINE_FIRE_MIN_SECONDS || 900);
   const nowSec = Math.floor(Date.now() / 1000);
-  const rateKey = opts.rateKey || "routine:last_fire";
+  // Per-target key stops one feed spamming itself; opts.globalKey adds a shared
+  // ceiling across many feeds (bounds cap-drain from many anon ids without
+  // requiring sign-in). Throttle if EITHER is inside the window.
+  const keys = [opts.rateKey || "routine:last_fire"];
+  if (opts.globalKey && opts.globalKey !== keys[0]) keys.push(opts.globalKey);
   if (env.WIRE_KV) {
-    const last = Number(await env.WIRE_KV.get(rateKey)) || 0;
-    const since = nowSec - last;
-    if (last && since < minInterval) return { ok: true, throttled: true, retryInSec: minInterval - since };
-    // Claim the throttle slot BEFORE firing so two near-simultaneous callers
-    // don't both pass the check and double-fire (wasting daily quota). KV has no
-    // compare-and-set, so a sub-second race window remains — acceptable here.
-    // Rolled back below if the fire itself fails, so a failure stays retryable.
-    await env.WIRE_KV.put(rateKey, String(nowSec), { expirationTtl: 86400 });
+    for (const k of keys) {
+      const last = Number(await env.WIRE_KV.get(k)) || 0;
+      const since = nowSec - last;
+      if (last && since < minInterval) return { ok: true, throttled: true, retryInSec: minInterval - since };
+    }
+    // Claim the slots BEFORE firing so two near-simultaneous callers don't both
+    // pass and double-fire. KV has no compare-and-set, so a sub-second race
+    // remains — acceptable here. Rolled back below if the fire itself fails.
+    for (const k of keys) await env.WIRE_KV.put(k, String(nowSec), { expirationTtl: 86400 });
   }
-  const releaseSlot = async () => { if (env.WIRE_KV) { try { await env.WIRE_KV.delete(rateKey); } catch (_) {} } };
+  const releaseSlot = async () => { if (env.WIRE_KV) for (const k of keys) { try { await env.WIRE_KV.delete(k); } catch (_) {} } };
   const text = opts.text || `On-demand shared-feed refresh at ${new Date().toISOString()}. Re-run the briefing and POST it to /api/ingest.`;
   let res;
   try {
@@ -872,15 +885,17 @@ export default {
           && !(useRoutine && !hasItems && cached.source !== "routine");
         if (fresh) return json(cached);
         // When the routine owns generation, never trigger a metered API build
-        // here. Only the signed-in OWNER may spend a routine run on their
-        // personalised feed (so anon/cross-user callers can't drain the daily
-        // cap); the shared feed is populated by the routine's schedule + refresh.
+        // here — a personalised feed is built by the routine (subscription), the
+        // shared feed by the routine's schedule + refresh. A global throttle
+        // bounds total personalised fires (cap-drain protection) so we don't
+        // need a sign-in gate that would block the owner's own anon feed.
         if (useRoutine && routineFireConfigured(env)) {
           let refresh;
-          if (t.key !== "shared" && sUid && t.key === "u:" + sUid) {
+          if (t.key !== "shared") {
             refresh = await fireRoutine(env, {
               text: personalisedFireText(t.key.slice(2), t.profile),
               rateKey: `routine:last_fire:${t.key}`,
+              globalKey: "routine:last_fire:_personalised",
             });
           }
           const base = hasItems ? { ...cached, generating: true } : generatingShell();
@@ -900,17 +915,16 @@ export default {
         // the shared feed AND a signed-in user's personalised desks (the routine
         // is told which desks + which user to build, throttled per target).
         const useRoutine = String(env.FEED_SOURCE || "").toLowerCase() === "routine";
-        // Shared fire is open to anyone (bounded by one global throttle key); a
-        // personalised fire requires the signed-in OWNER, so an attacker can't
-        // drain the routine's daily cap via spoofed/varied userIds. A non-owner
-        // personalised request falls through to the metered build path.
-        const ownsPersonalised = t.key !== "shared" && sUid && t.key === "u:" + sUid;
-        if (useRoutine && routineFireConfigured(env) && (t.key === "shared" || ownsPersonalised)) {
+        // Routine owns generation: refresh fires the routine (subscription) for
+        // the shared feed OR this caller's own personalised feed. Per-target +
+        // global throttles bound cap-drain, so no sign-in gate is needed.
+        if (useRoutine && routineFireConfigured(env)) {
           const refresh = t.key === "shared"
             ? await fireRoutine(env, {})
             : await fireRoutine(env, {
                 text: personalisedFireText(t.key.slice(2), t.profile),
                 rateKey: `routine:last_fire:${t.key}`,
+                globalKey: "routine:last_fire:_personalised",
               });
           const cached = await readJSON(env, t.writeKeys.latest);
           return json({ ...(cached || generatingShell()), generating: true, refresh });
@@ -956,8 +970,19 @@ export default {
         if (env.WIRE_KV) await env.WIRE_KV.put(profileKey(u), JSON.stringify(profile));
         // Only regenerate when the desk SET changes (not on every swipe sync).
         if (body.regenerate) {
-          const writeKeys = { latest: userBriefKey(u), snapshot: `${userBriefKey(u)}:${londonDate()}` };
-          ctx.waitUntil(startBuild(env, `u:${u}`, profile, writeKeys));
+          const useRoutine = String(env.FEED_SOURCE || "").toLowerCase() === "routine";
+          if (useRoutine && routineFireConfigured(env)) {
+            // Rebuild via the routine (subscription), not the metered API — else
+            // editing desks lands the "credit balance" error on every desk.
+            ctx.waitUntil(fireRoutine(env, {
+              text: personalisedFireText(u, profile),
+              rateKey: `routine:last_fire:u:${u}`,
+              globalKey: "routine:last_fire:_personalised",
+            }));
+          } else {
+            const writeKeys = { latest: userBriefKey(u), snapshot: `${userBriefKey(u)}:${londonDate()}` };
+            ctx.waitUntil(startBuild(env, `u:${u}`, profile, writeKeys));
+          }
           return json({ ok: true, generating: true });
         }
         return json({ ok: true });
@@ -978,8 +1003,11 @@ export default {
       if (!useRoutine) {
         await startBuild(env, "shared", null, { latest: SHARED_KEY, snapshot: `briefing:${londonDate()}` });
       }
-      // then each known personalised user
-      if (env.WIRE_KV) {
+      // then each known personalised user — metered builds only. When the routine
+      // owns generation we SKIP these (personalised is built on-demand by the
+      // routine; firing one routine run per user per cron would blow the daily
+      // cap, and a metered build just churns the possibly-dead API).
+      if (!useRoutine && env.WIRE_KV) {
         try {
           const list = await env.WIRE_KV.list({ prefix: "profile:" });
           for (const k of list.keys) {
