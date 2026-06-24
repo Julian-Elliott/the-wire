@@ -38,9 +38,12 @@ Rules for every item:
   rumour-mill churn, and anything that's mostly someone whinging. No ads.
 - `summary` ≤ 24 words. `why` = why this reader should care.
 - `readout` = a longer-form spoken version for the desk's audio "listen" button:
-  **3–6 natural sentences** (~60–120 words) that a presenter would read aloud —
-  the story with a bit more context and the so-what, in plain spoken British
-  English. No markdown, no headings, no URLs; just speakable prose.
+  **3 to 6 natural sentences** (~60 to 120 words) that a presenter would read
+  aloud, the story with a bit more context and the so-what, in plain spoken
+  British English. No markdown, no headings, no URLs; just speakable prose.
+- **House style: never use em dashes or en dashes (— or –). Use commas, or split
+  the sentence.** This applies to every field, including `summary`, `why`,
+  `readout`, and the `podcast` script.
 - Always include a real `source` (publication) and `url` (link to the story).
 
 The desks (use the `category` id exactly as given):
@@ -63,16 +66,37 @@ request (e.g. `{ "userId": "abc123", "items": [ … ] }`).
 
 ```json
 {
-  "fixture": "Liverpool vs Arsenal — Sat, 17:30",
+  "fixture": "Liverpool vs Arsenal, Sat, 17:30",
   "items": [
-    { "category": "liverpool", "title": "...", "summary": "<=24 words", "why": "why a fan cares", "contentType": "News", "source": "BBC Sport", "url": "https://..." },
-    { "category": "markets", "title": "FTSE 100", "direction": "down", "changePct": "-0.6%", "summary": "...", "why": "the real reason it moved", "contentType": "Index move", "source": "Reuters", "url": "https://..." }
+    { "category": "liverpool", "title": "...", "summary": "<=24 words", "why": "why a fan cares", "readout": "3-6 spoken sentences", "contentType": "News", "source": "BBC Sport", "url": "https://..." },
+    { "category": "markets", "title": "FTSE 100", "direction": "down", "changePct": "-0.6%", "summary": "...", "why": "the real reason it moved", "readout": "...", "contentType": "Index move", "source": "Reuters", "url": "https://..." }
+  ],
+  "podcast": [
+    { "desk": "world",   "text": "[warm] Good morning, welcome to The Wire..." },
+    { "desk": "markets", "text": "[measured] Let's start with the markets..." },
+    { "desk": "liverpool", "text": "[excited] And big news from Anfield..." }
   ]
 }
 ```
 
 `contentType` is a short tag for the kind of story (e.g. `News`, `Analysis`,
 `Index move`, `Earnings`). Anything sensible is fine.
+
+### The `podcast` field (shared build only — omit on personalised builds)
+
+A short, lively **multi-host audio script** of the day, ~2-4 minutes. Each turn is
+`{ "desk": "<category id>", "text": "<what that host says>" }`; the desk id picks
+the host's voice. Write it as a real conversation between the desk hosts (World,
+Markets, Liverpool, Gaming, EV, Worcester) covering the day's biggest stories,
+handing off to each other naturally. ~14-22 turns, each 1-3 sentences.
+
+- Speakable British English only: no markdown, no URLs, no headings, spell out
+  figures a presenter would say.
+- You may use ElevenLabs v3 audio tags sparingly at the **start** of a turn to set
+  delivery: `[warm]`, `[excited]`, `[measured]`, `[laughs]`, `[thoughtful]`.
+- Match each host to its desk's personality (e.g. Markets is cool and analytical,
+  Liverpool is warm and enthusiastic, Gaming is quick and witty).
+- Open with a short welcome from World, close with a quick sign-off.
 
 ## 3. POST it to the site
 

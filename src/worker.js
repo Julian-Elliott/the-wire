@@ -591,23 +591,58 @@ function personalisedFireText(uid, profile) {
 // ---- audio (per-item "listen" read-outs, ElevenLabs → R2 cache) ----------
 // Per-desk read-out voices (real voice_ids from the account). Custom desks and
 // anything unmapped use _default. British-leaning, all distinct.
+// Voices chosen to match each desk's MBTI persona (see CATS).
 const VOICE_MAP = {
-  liverpool: "JBFqnCBsd6RMkjVDRZzb", // George — warm British storyteller
-  worcester: "onwK4e9ZLuTAKqWW03F9", // Daniel — steady British broadcaster
-  gaming:    "TX3LPaxmHKxFdv7VOQHJ", // Liam — energetic creator
-  ev:        "G17SuINrv2H9FC6nvetn", // Christopher — gentle, trustworthy (British)
-  markets:   "RILOU7YmBhvwJGDGjNmP", // Jane — professional reader (British)
-  world:     "nPczCjzI2devNBz1zQrb", // Brian — deep, resonant, authoritative
-  _default:  "SAz9YHcvj6GT2YYXdXww", // River — relaxed, neutral, informative
+  liverpool: "dI6Ldou06iqSFGEJjKW0", // ENFP Campaigner → Rupert: warm, enthusiastic
+  worcester: "MJqcNjMbvfGUxatGjPcI", // ESFJ Consul    → Daisy: chatty, caring, neighbourly
+  gaming:    "GNNHfA70qSrbkQtRy6bh", // ENTP Debater   → Anna: sharp, quick, natural wit
+  ev:        "nstAjY74EkciBLEg9uvD", // ESTP Showman   → Prince: energetic, expressive
+  markets:   "K130COXALy2ZgNlI3Ezo", // INTJ Architect → Jonathan: cool, measured, low
+  world:     "NbkKnEAZ7Bqw4EAkVEaz", // INFJ Advocate  → Olivia: measured, principled, polished
+  _default:  "tpS5zOAgWUiQMhzYbG2h", // Sapphire: warm, well-mannered conversational
 };
 const voiceFor = cat => VOICE_MAP[cat] || VOICE_MAP._default;
+// House style: em dashes read as long pauses and look "AI" — use commas instead.
+const deDash = s => String(s == null ? "" : s).replace(/\s*[—–]\s*/g, ", ");
 
 // What gets read aloud: the routine's longer-form `readout` if present, else a
 // sensible fallback from title + summary + why (so it works before the routine
 // adds read-outs).
 function readoutText(it) {
-  if (it && it.readout && String(it.readout).trim().length > 40) return String(it.readout).trim().slice(0, 4000);
-  return [it && it.title, it && it.summary, it && it.why].filter(Boolean).map(String).join(". ").trim().slice(0, 4000);
+  if (it && it.readout && String(it.readout).trim().length > 40) return deDash(it.readout).trim().slice(0, 4000);
+  return deDash([it && it.title, it && it.summary, it && it.why].filter(Boolean).map(String).join(". ")).trim().slice(0, 4000);
+}
+
+// Render a multi-host podcast from the routine's script (an array of
+// {desk|category, text} turns) via the v3 Text-to-Dialogue API. Dialogue calls
+// cap ~3000 chars, so we pack consecutive turns into chunks and concatenate the
+// returned MP3s (frame-level concat plays fine in browsers). Cached in R2.
+async function renderPodcast(env, turns) {
+  const chunks = []; let cur = []; let len = 0;
+  for (const t of (turns || [])) {
+    const text = deDash(String((t && t.text) || "")).trim().slice(0, 700);
+    if (!text) continue;
+    const voice_id = voiceFor((t && (t.desk || t.category)) || "");
+    const cost = text.length + 24;
+    if (len + cost > 2400 && cur.length) { chunks.push(cur); cur = []; len = 0; }
+    cur.push({ voice_id, text }); len += cost;
+  }
+  if (cur.length) chunks.push(cur);
+  if (!chunks.length) throw new Error("empty script");
+  const parts = [];
+  for (const inputs of chunks) {
+    const res = await fetch("https://api.elevenlabs.io/v1/text-to-dialogue?output_format=mp3_44100_128", {
+      method: "POST",
+      headers: { "xi-api-key": env.ELEVENLABS_API_KEY, "content-type": "application/json" },
+      body: JSON.stringify({ model_id: "eleven_v3", inputs }),
+    });
+    if (!res.ok) { const e = await res.text().catch(() => ""); throw new Error(`dialogue ${res.status}: ${e.slice(0, 200)}`); }
+    parts.push(new Uint8Array(await res.arrayBuffer()));
+  }
+  const total = parts.reduce((n, p) => n + p.length, 0);
+  const out = new Uint8Array(total); let off = 0;
+  for (const p of parts) { out.set(p, off); off += p.length; }
+  return out;
 }
 
 async function sha16(text) {
@@ -634,10 +669,10 @@ function normalizeIngest(items) {
     .slice(0, 200)
     .map(x => ({
       id: uid(), category: String(x.category).replace(/[^A-Za-z0-9_-]/g, "").slice(0, 40),
-      title: String(x.title).slice(0, 240),
-      summary: x.summary ? String(x.summary).slice(0, 400) : "",
-      why: x.why ? String(x.why).slice(0, 400) : "",
-      readout: x.readout ? String(x.readout).slice(0, 1800) : "",
+      title: deDash(String(x.title)).slice(0, 240),
+      summary: x.summary ? deDash(String(x.summary)).slice(0, 400) : "",
+      why: x.why ? deDash(String(x.why)).slice(0, 400) : "",
+      readout: x.readout ? deDash(String(x.readout)).slice(0, 1800) : "",
       contentType: x.contentType ? String(x.contentType).slice(0, 40) : "News",
       source: x.source ? String(x.source).slice(0, 120) : "",
       url: x.url ? String(x.url).slice(0, 600) : "",
@@ -645,6 +680,21 @@ function normalizeIngest(items) {
       changePct: x.changePct || null,
     }))
     .filter(x => x.category);
+}
+
+// The daily podcast script: an array of {desk, text} turns the routine writes on
+// the shared run. Desk ids map to host voices at render time.
+function sanitizePodcast(turns) {
+  if (!Array.isArray(turns) || !turns.length) return null;
+  const out = turns
+    .filter(t => t && (t.text || t.line))
+    .slice(0, 80)
+    .map(t => ({
+      desk: String(t.desk || t.category || "").replace(/[^A-Za-z0-9_-]/g, "").slice(0, 40),
+      text: deDash(String(t.text || t.line || "")).slice(0, 700),
+    }))
+    .filter(t => t.text);
+  return out.length ? out : null;
 }
 
 // Persist an externally-supplied briefing into the SHARED feed, merging into
@@ -686,7 +736,11 @@ async function ingestBriefing(env, payload, target) {
   const desks = cats.map(id => ({ id, label: labelOf(id), builtin: CAT_ORDER.includes(id) }));
   const fixture = (payload && typeof payload.fixture === "string") ? payload.fixture : null;
 
-  const out = { date: londonDate(), generatedAt: stamp, slot, items, fixture, report, desks, source: "routine" };
+  // Daily podcast script (shared run only); keep any prior one if this payload
+  // doesn't carry a fresh script.
+  const podcast = sanitizePodcast(payload && payload.podcast) || (existing && existing.podcast) || null;
+
+  const out = { date: londonDate(), generatedAt: stamp, slot, items, fixture, report, desks, podcast, source: "routine" };
   if (env.WIRE_KV) {
     await env.WIRE_KV.put(writeKeys.latest, JSON.stringify(out));
     if (writeKeys.snapshot) await env.WIRE_KV.put(writeKeys.snapshot, JSON.stringify(out), { expirationTtl: 60 * 60 * 24 * 5 });
@@ -957,6 +1011,28 @@ export default {
         ctx.waitUntil(env.WIRE_AUDIO.put(key, bytes, { httpMetadata: { contentType: "audio/mpeg" } }));
         return new Response(bytes, { headers: { "content-type": "audio/mpeg", "cache-control": "public, max-age=86400" } });
       } catch (e) { return json({ error: "audio render failed", detail: String(e) }, 502); }
+    }
+
+    // Daily multi-host podcast. The routine writes the script into the shared
+    // feed; this renders it via Text-to-Dialogue on first play and caches the
+    // MP3 in R2 (keyed by the script hash, so a new script re-renders once).
+    // ?meta=1 returns readiness JSON instead of audio (for the player UI).
+    if (url.pathname === "/api/podcast/today" && request.method === "GET") {
+      if (!env.ELEVENLABS_API_KEY || !env.WIRE_AUDIO) return json({ error: "audio not configured" }, 404);
+      try {
+        const feed = await readJSON(env, SHARED_KEY);
+        const turns = feed && Array.isArray(feed.podcast) ? feed.podcast : null;
+        const wantMeta = url.searchParams.get("meta") === "1";
+        if (!turns || !turns.length) return wantMeta ? json({ ready: false }) : json({ error: "podcast not ready" }, 404);
+        const sig = await sha16(JSON.stringify(turns).slice(0, 12000));
+        const key = `podcast/${feed.date || londonDate()}/${sig}.mp3`;
+        const hit = await env.WIRE_AUDIO.get(key);
+        if (wantMeta) return json({ ready: !!hit, date: feed.date || null, turns: turns.length, key });
+        if (hit) return new Response(hit.body, { headers: { "content-type": "audio/mpeg", "cache-control": "public, max-age=3600" } });
+        const bytes = await renderPodcast(env, turns);
+        ctx.waitUntil(env.WIRE_AUDIO.put(key, bytes, { httpMetadata: { contentType: "audio/mpeg" } }));
+        return new Response(bytes, { headers: { "content-type": "audio/mpeg", "cache-control": "public, max-age=3600" } });
+      } catch (e) { return json({ error: "podcast render failed", detail: String(e) }, 502); }
     }
 
     if (url.pathname === "/api/today") {

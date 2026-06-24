@@ -131,6 +131,12 @@ a{ color:inherit; text-decoration:none; }
 .fil[draggable="true"]{ cursor:grab; }
 .fil.dragging{ opacity:.45; }
 .fil.drop-target{ outline:2px dashed var(--amber); outline-offset:1px; }
+.podcast{ max-width:760px; margin:14px auto 0; padding:11px 15px; display:flex; align-items:center; gap:13px; border:1px solid var(--line); border-radius:14px; background:linear-gradient(180deg, color-mix(in srgb, var(--amber) 9%, var(--panel)), var(--panel)); }
+.pod-play{ flex:0 0 auto; width:42px; height:42px; border-radius:50%; border:none; background:var(--amber); color:#1a1206; font-size:15px; cursor:pointer; display:flex; align-items:center; justify-content:center; }
+.pod-play.loading{ opacity:.65; }
+.pod-meta{ min-width:0; }
+.pod-title{ font-weight:650; font-size:14px; letter-spacing:.01em; }
+.pod-sub{ font-size:12px; color:var(--muted); margin-top:1px; }
 .fil.on{ color:#15171b; font-weight:600; }
 .fil .cnt{ font-family:'JetBrains Mono',monospace; font-size:11px; opacity:.8; }
 
@@ -795,6 +801,10 @@ function render(){
     ${settingsHtml}
     ${(sumLine || nNew) ? `<section class="hero"><p class="sum">${esc(sumLine)}${nNew?`${sumLine?" · ":""}<span style="color:var(--amber)">${nNew} new</span>`:""}</p></section>` : ""}
     <nav class="filters"><div class="filters-inner">${filterBtns}</div></nav>
+    <section class="podcast" id="podbar">
+      <button class="pod-play" id="podplay" type="button" aria-label="Play today's podcast">▶</button>
+      <div class="pod-meta"><div class="pod-title">Today's briefing podcast</div><div class="pod-sub" id="podsub">The desks, in conversation</div></div>
+    </section>
     <main class="feed">${onboardHtml}${feedHtml}</main>
     <footer class="foot">British English, £, no ads, no comment columns. Your desks, each with its own voice — swipe to tune them. Refreshed through the day, newest at the top.${pulled}</footer>
     ${state.toast?`<div class="toast"><span>${esc(state.toast.msg)}</span><button id="undo">Undo</button></div>`:""}
@@ -861,6 +871,26 @@ function toggleListen(id){
   syncListenUI();
 }
 
+// ---- daily podcast player (one shared player) ----------------------------
+let _pod=null;
+function syncPod(){
+  const b=document.getElementById("podplay"); if(!b) return;
+  const playing=!!(_pod && !_pod.paused && !_pod.ended);
+  const loading=!!(_pod && !_pod.paused && _pod.readyState<3 && !_pod.ended);
+  b.classList.toggle("loading",loading);
+  b.textContent = loading ? "…" : (playing ? "⏸" : "▶");
+}
+function podToggle(){
+  if(_pod){ _pod.paused ? _pod.play() : _pod.pause(); syncPod(); return; }
+  const sub=document.getElementById("podsub"); if(sub) sub.textContent="Generating today's episode… (a few seconds)";
+  _pod=new Audio("/api/podcast/today");
+  ["playing","pause","ended","waiting","canplay"].forEach(ev=> _pod.addEventListener(ev, syncPod));
+  _pod.addEventListener("error", ()=>{ const s=document.getElementById("podsub"); if(s) s.textContent="Not ready yet — it's built with each refresh."; syncPod(); });
+  _pod.addEventListener("playing", ()=>{ const s=document.getElementById("podsub"); if(s) s.textContent="The desks, in conversation"; });
+  _pod.play().catch(()=> syncPod());
+  syncPod();
+}
+
 // ---- event wiring (incl. swipe gestures) ---------------------------------
 function wire(){
   const $ = s => document.getElementById(s);
@@ -903,6 +933,14 @@ function wire(){
   });
   document.querySelectorAll(".listen").forEach(b=> b.onclick = (e)=>{ e.stopPropagation(); toggleListen(b.getAttribute("data-listen")); });
   syncListenUI();
+  const pp=document.getElementById("podplay");
+  if(pp){
+    pp.onclick=podToggle; syncPod();
+    if(!_pod) fetch("/api/podcast/today?meta=1").then(r=>r.json()).then(m=>{
+      const s=document.getElementById("podsub"); if(!s||_pod) return;
+      s.textContent = (m&&m.ready) ? "Ready · the desks in conversation" : (m&&m.turns ? "Tap play to generate today's episode" : "Built with the next refresh");
+    }).catch(()=>{});
+  }
   document.querySelectorAll("[data-restore]").forEach(b=> b.onclick = ()=> restoreType(b.dataset.restore));
 
   document.querySelectorAll(".card[data-id], .card[data-onboard]").forEach(card=>{
