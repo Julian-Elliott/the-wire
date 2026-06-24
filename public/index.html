@@ -13,6 +13,13 @@
   --amber:#F2A93B; --red:#E23B4C; --up:#46C06A; --down:#F0563A;
   --violet:#9B8CFF; --sky:#5BB8E8; --green:#5FBE7E; --teal:#2FC8C8;
 }
+/* Light mode: override the palette; everything else uses these vars. */
+body[data-theme="light"]{
+  --ink:#F4F1EA; --panel:#FFFFFF; --panel2:#F1EDE5; --line:#DFDACE;
+  --text:#1A1D24; --muted:#5C626C; --faint:#9197A1;
+  --amber:#B5730C; --red:#CB2F40; --up:#2E9E54; --down:#D8482C;
+  --violet:#6F5BE0; --sky:#2E8FC4; --green:#3A9E5E; --teal:#1FA3A3;
+}
 *{ box-sizing:border-box; }
 body{
   margin:0; background:radial-gradient(120% 80% at 50% -10%, rgba(242,169,59,.10), transparent 55%), var(--ink);
@@ -640,19 +647,6 @@ function render(){
   const report = state.data && state.data.report;
   const building = isBuilding(state.data);
 
-  // ticker
-  let toks = [];
-  if(state.data && state.data.items){
-    state.data.items.filter(i=>i.category==="markets").forEach(m=>{
-      const arrow = m.direction==="up"?"▲":m.direction==="down"?"▼":"■";
-      const col = m.direction==="up"?"var(--up)":m.direction==="down"?"var(--down)":"var(--muted)";
-      toks.push({t:`${m.title} ${arrow} ${m.changePct||""}`.trim(), c:col});
-    });
-    if(fixture) toks.push({t:`LFC ◦ ${fixture}`, c:"var(--red)"});
-    order.forEach(k=> { if(c[k]) toks.push({t:`${c[k]} ${cat(k).label}`, c:cat(k).accent}); });
-  }
-  if(!toks.length) toks.push({t: building ? "Building your briefing…" : "Loading the wire…", c:"var(--muted)"});
-  const tickerHtml = [...toks,...toks].map(tk=>`<span class="tok"><span class="tok-dot" style="background:${tk.c}"></span><span style="color:${tk.c}">${esc(tk.t)}</span></span>`).join("");
 
   const cooldownNote = state.cooldown != null
     ? `Updating shortly — on cooldown${state.cooldown > 60 ? ` (~${Math.ceil(state.cooldown/60)} min)` : ""}.`
@@ -770,11 +764,11 @@ function render(){
       <div class="mast-l"><div class="eyebrow">Personal edition · UK</div><h1 class="title">THE WIRE</h1></div>
       <div class="mast-r"><div class="date">${longDate()}</div>
         <div class="mast-btns">
+          <button class="icbtn" id="theme" aria-label="Toggle dark/light">${curTheme()==="dark"?"☀":"☾"}</button>
           <button class="icbtn" id="cog" aria-label="Settings">⚙</button>
           <button class="refresh" id="refresh" ${(state.loading||refreshLockMsLeft()>0)?"disabled":""}>${refreshLockMsLeft()>0?"Refreshing…":(state.loading?"Pulling…":"Refresh")}</button>
         </div></div>
     </header>
-    <div class="ticker" aria-hidden="true"><div class="ticker-track">${tickerHtml}</div></div>
     ${settingsHtml}
     <section class="hero"><h2 class="hello">${greeting()}${state.auth.name?`, ${esc(state.auth.name)}`:""}.</h2><p class="sum">${esc(sumLine)}${nNew?`${sumLine?" · ":""}<span style="color:var(--amber)">${nNew} new</span>`:""}</p></section>
     <nav class="filters">${filterBtns}</nav>
@@ -826,6 +820,7 @@ function deskRowHtml(id, builtin){
 // ---- event wiring (incl. swipe gestures) ---------------------------------
 function wire(){
   const $ = s => document.getElementById(s);
+  $("theme") && ($("theme").onclick = toggleTheme);
   $("cog") && ($("cog").onclick = ()=>{ state.showSettings=!state.showSettings; if(!state.showSettings) state.showAddDesk=false; render(); });
   $("refresh") && ($("refresh").onclick = ()=>{ if(refreshLockMsLeft()>0) return; load(true); });
   $("retry") && ($("retry").onclick = ()=> load(true));
@@ -895,7 +890,13 @@ function wire(){
   });
 }
 
+// ---- dark / light theme -------------------------------------------------
+function curTheme(){ try{ return localStorage.getItem("jackwire:theme")||"dark"; }catch(_){ return "dark"; } }
+function applyTheme(t){ if(t==="light") document.body.setAttribute("data-theme","light"); else document.body.removeAttribute("data-theme"); }
+function toggleTheme(){ const t = curTheme()==="dark"?"light":"dark"; try{ localStorage.setItem("jackwire:theme", t); }catch(_){} applyTheme(t); render(); }
+
 async function init(){
+  applyTheme(curTheme());
   render();
   await fetchMe();
   if(state.auth.signedIn) await loadServerProfile();      // adopt the synced profile
