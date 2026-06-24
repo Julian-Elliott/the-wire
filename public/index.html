@@ -104,6 +104,9 @@ a{ color:inherit; text-decoration:none; }
 .desk-rm{ background:transparent; border:1px solid var(--line); color:var(--faint); border-radius:7px; padding:3px 9px; font-size:11.5px; cursor:pointer; font-family:'Inter',sans-serif; }
 .desk-rm:hover{ color:var(--down); border-color:var(--down); }
 .desk-voice{ color:var(--muted); font-size:12.5px; margin-top:6px; line-height:1.45; }
+.desk-note{ width:100%; margin-top:7px; box-sizing:border-box; resize:vertical; min-height:38px; background:var(--bg); color:var(--text); border:1px solid var(--line); border-radius:8px; padding:7px 9px; font-family:inherit; font-size:12.5px; line-height:1.4; }
+.desk-note:focus{ outline:none; border-color:var(--amber); }
+.desk-note::placeholder{ color:var(--faint); }
 .desk-lean{ font-family:'JetBrains Mono',monospace; font-size:10.5px; color:var(--muted); margin-top:7px; }
 
 .hero{ max-width:760px; margin:0 auto; padding:26px 20px 8px; }
@@ -317,7 +320,7 @@ function saveRead(){ try{ localStorage.setItem(LS.read, JSON.stringify({ date: s
 function profileForServer(){
   const dis = state.profile.desks.disabled||[];
   const enabled = dis.length ? BUILTIN_ORDER.filter(id=>!dis.includes(id)) : null;
-  return { desks:{ enabled, custom: state.profile.desks.custom||[] }, weights: w() };
+  return { desks:{ enabled, custom: state.profile.desks.custom||[] }, weights: w(), notes: state.profile.notes||{} };
 }
 async function putProfile(regenerate){
   try{
@@ -338,7 +341,7 @@ function adoptServerProfile(sp){
   if(!sp || !sp.desks) return;
   const enabled = Array.isArray(sp.desks.enabled) ? sp.desks.enabled : null;
   const disabled = enabled ? BUILTIN_ORDER.filter(id=>!enabled.includes(id)) : [];
-  state.profile = { desks:{ disabled, custom: Array.isArray(sp.desks.custom)?sp.desks.custom:[] }, weights: sp.weights||{} };
+  state.profile = { desks:{ disabled, custom: Array.isArray(sp.desks.custom)?sp.desks.custom:[] }, weights: sp.weights||{}, notes: sp.notes||{} };
   saveProfile();
 }
 async function loadServerProfile(){
@@ -354,6 +357,17 @@ function syncDesks(){ // desk set changed → regenerate, then poll for the new 
   state.loading = true; render();
   clearTimeout(_dt);
   _dt = setTimeout(()=>{ putProfile(true).then(()=> load(false)); }, 1000);
+}
+let _nt;
+function setDeskNote(id, txt){ // per-desk reader instruction → rebuild that feed
+  if(!id) return;
+  state.profile.notes = state.profile.notes || {};
+  const v = String(txt||"").replace(/[\r\n]+/g," ").trim().slice(0,280);
+  if(v === (state.profile.notes[id]||"")) return; // no change
+  if(v) state.profile.notes[id] = v; else delete state.profile.notes[id];
+  saveProfile();
+  clearTimeout(_nt);
+  _nt = setTimeout(()=>{ putProfile(true).then(()=> load(false)); }, 1500);
 }
 
 // ---- data load + background-build polling --------------------------------
@@ -667,7 +681,6 @@ function render(){
           <div class="dform">
             <input id="d-label" maxlength="40" placeholder="Desk name (e.g. Formula 1, AI research, Cycling)" />
             <textarea id="d-topic" maxlength="200" placeholder="What should this desk cover? Be specific — e.g. 'Formula 1: race results, driver moves, regulation and team news'"></textarea>
-            <input id="d-voice" maxlength="160" placeholder="Voice (optional) — e.g. 'a witty, plain-English insider'" />
             <div class="row">
               <button class="minibtn" id="d-add">Add desk</button>
               <button class="linkbtn" id="d-cancel">Cancel</button>
@@ -748,7 +761,7 @@ function deskRowHtml(id, builtin){
   const off = (state.profile.desks.disabled||[]).includes(id);
   const cd = customById(id);
   const persona = builtin ? CATS[id].persona : info.persona;
-  const voice = builtin ? CATS[id].voice : ((cd && (cd.voice || cd.topic)) || "Your custom desk.");
+  const note = (state.profile.notes && state.profile.notes[id]) || "";
   const lean = deskLean(id);
   return `<div class="desk ${off?'off':''}">
     <div class="desk-h">
@@ -759,7 +772,8 @@ function deskRowHtml(id, builtin){
         ? `<button class="desk-toggle" data-toggle="${esc(id)}">${off?'Off':'On'}</button>`
         : `<button class="desk-rm" style="margin-left:auto" data-remove="${esc(id)}">Remove</button>`}
     </div>
-    <div class="desk-voice">${esc(voice)}</div>
+    <textarea class="desk-note" data-note="${esc(id)}" maxlength="280" rows="2"
+      placeholder="Message this desk — e.g. ‘I’m a pro, skip the basics’ or ‘no articles from the Sun’">${esc(note)}</textarea>
     <div class="desk-lean"><span style="color:${info.accent}">▸ ${esc(lean.head)}</span>${lean.detail?` · ${esc(lean.detail)}`:''}</div>
   </div>`;
 }
@@ -777,7 +791,7 @@ function wire(){
   $("undo") && ($("undo").onclick = ()=> undo());
   $("d-new") && ($("d-new").onclick = ()=>{ state.showAddDesk=true; render(); });
   $("d-cancel") && ($("d-cancel").onclick = ()=>{ state.showAddDesk=false; render(); });
-  $("d-add") && ($("d-add").onclick = ()=> addCustomDesk(($("d-label")||{}).value, ($("d-topic")||{}).value, ($("d-voice")||{}).value));
+  $("d-add") && ($("d-add").onclick = ()=> addCustomDesk(($("d-label")||{}).value, ($("d-topic")||{}).value, ""));
   $("reset-learn") && ($("reset-learn").onclick = ()=>{ state.profile.weights={}; saveProfile(); putProfile(false); state.toast={msg:"Cleared learned preferences"}; clearTimeout(window.__tt); window.__tt=setTimeout(()=>{state.toast=null;render();},3000); render(); });
   $("signout") && ($("signout").onclick = ()=>{ location.href="/auth/apple/logout"; });
 
@@ -785,6 +799,7 @@ function wire(){
   document.querySelectorAll("[data-mute]").forEach(b=> b.onclick = (e)=>{ e.stopPropagation(); muteType(b.dataset.mute); });
   document.querySelectorAll("[data-toggle]").forEach(b=> b.onclick = ()=> toggleBuiltin(b.dataset.toggle));
   document.querySelectorAll("[data-remove]").forEach(b=> b.onclick = ()=> removeCustomDesk(b.dataset.remove));
+  document.querySelectorAll(".desk-note").forEach(el=> el.onchange = ()=> setDeskNote(el.getAttribute("data-note"), el.value));
   document.querySelectorAll("[data-restore]").forEach(b=> b.onclick = ()=> restoreType(b.dataset.restore));
 
   document.querySelectorAll(".card[data-id], .card[data-onboard]").forEach(card=>{

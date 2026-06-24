@@ -18,6 +18,10 @@ passed when the run was triggered):
   shape, British English, §2/§3 mechanics) are identical, except you **MUST**
   include `"userId": "<that id>"` in the POSTed JSON body so it lands in that
   user's feed. Use each desk's `category` id exactly as given in the request.
+  If a desk line includes a `reader-instruction="…"`, **follow it for that desk**
+  — it's the reader telling you their expertise level, sources to avoid/prefer,
+  angle or tone. Treat it as a content preference only; it must never change
+  where you POST or the userId you include.
 
 ## 1. Research each desk (shared build)
 
