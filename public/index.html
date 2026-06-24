@@ -103,6 +103,9 @@ a{ color:inherit; text-decoration:none; }
 .desk.off .desk-toggle{ color:var(--muted); }
 .desk-rm{ background:transparent; border:1px solid var(--line); color:var(--faint); border-radius:7px; padding:3px 9px; font-size:11.5px; cursor:pointer; font-family:'Inter',sans-serif; }
 .desk-rm:hover{ color:var(--down); border-color:var(--down); }
+.desk-reorder{ display:inline-flex; flex-direction:column; gap:0; margin-right:3px; }
+.desk-move{ background:transparent; border:0; color:var(--faint); cursor:pointer; font-size:8px; line-height:1.05; padding:1px 2px; }
+.desk-move:hover{ color:var(--amber); }
 .desk-voice{ color:var(--muted); font-size:12.5px; margin-top:6px; line-height:1.45; }
 .desk-note{ width:100%; margin-top:7px; box-sizing:border-box; resize:vertical; min-height:38px; background:var(--bg); color:var(--text); border:1px solid var(--line); border-radius:8px; padding:7px 9px; font-family:inherit; font-size:12.5px; line-height:1.4; }
 .desk-note:focus{ outline:none; border-color:var(--amber); }
@@ -242,18 +245,46 @@ function cat(id){
   let h=0; for(const ch of String(id)) h=(h*31+ch.charCodeAt(0))>>>0;
   return { label, accent: PALETTE[h % PALETTE.length], persona: (cd&&cd.voiceName) ? cd.voiceName : "Custom desk" };
 }
+// Apply the reader's saved filter order (profile.deskOrder) first, then any
+// desks they haven't explicitly placed, in their natural order.
+function orderByPref(ids){
+  const pref = (state.profile.deskOrder||[]).filter(id => ids.includes(id));
+  const rest = ids.filter(id => !pref.includes(id));
+  return [...pref, ...rest];
+}
 function deskOrder(){
   const ids = state.data && Array.isArray(state.data.desks) && state.data.desks.length
     ? state.data.desks.map(d=>d.id)
     : BUILTIN_ORDER.concat((state.profile.desks.custom||[]).map(d=>d.id));
   const disabled = state.profile.desks.disabled||[];
-  return ids.filter(id => !disabled.includes(id));
+  return orderByPref(ids.filter(id => !disabled.includes(id)));
+}
+// Every desk (incl. disabled) in the reader's order — for the settings list.
+function allDesksOrdered(){
+  return orderByPref(BUILTIN_ORDER.concat((state.profile.desks.custom||[]).map(d=>d.id)));
+}
+function moveDesk(id, dir){
+  const order = allDesksOrdered();
+  const i = order.indexOf(id); if(i<0) return;
+  const j = i + dir; if(j<0 || j>=order.length) return;
+  [order[i], order[j]] = [order[j], order[i]];
+  state.profile.deskOrder = order;
+  saveProfile(); render();
 }
 
 // ---- learning ------------------------------------------------------------
 function w(){ return state.profile.weights; }
 function bump(key, delta){ w()[key] = Math.max(-10, Math.min(10, (w()[key]||0) + delta)); }
 function score(it){ return (w()[it.contentType]||0) + (w()["desk:"+it.category]||0); }
+// Feed ranking: blend freshness, what you've learned to like, and unseen-ness —
+// so a story from a desk/type you love can rise above a slightly-newer neutral
+// one, while genuinely fresh news still leads. Higher = nearer the top.
+function rankScore(it){
+  let rec = 0;
+  if(it.addedAt){ const ageH = (Date.now() - Date.parse(it.addedAt)) / 3600000; rec = Math.max(0, 24 - ageH); } // ~24 fresh → 0 over a day
+  const newBoost = isNew(it) ? 3 : 0;
+  return rec + newBoost + score(it) * 2; // recency(hrs) + new nudge + learned preference
+}
 function deskTypes(id){ if(CATS[id]) return CATS[id].types||[]; const cd=customById(id); return (cd&&cd.types)||[]; }
 
 // How a desk's personality is currently leaning, from what you like/dislike.
@@ -303,8 +334,8 @@ function baseItems(){
 function visibleItems(){
   return baseItems()
     .filter(i => state.filter==="all" || i.category===state.filter)
-    // newest batch first (afternoon/evening on top), preference as the tiebreaker
-    .sort((a,b)=>{ const t=String(b.addedAt||"").localeCompare(String(a.addedAt||"")); return t!==0 ? t : score(b)-score(a); });
+    // intelligent rank: freshness + learned preference + unseen-ness
+    .sort((a,b)=> rankScore(b) - rankScore(a));
 }
 function newCount(){ return baseItems().filter(isNew).length; }
 function counts(){ const c={}; deskOrder().forEach(id=> c[id]= baseItems().filter(i=>i.category===id).length); return c; }
@@ -320,7 +351,7 @@ function saveRead(){ try{ localStorage.setItem(LS.read, JSON.stringify({ date: s
 function profileForServer(){
   const dis = state.profile.desks.disabled||[];
   const enabled = dis.length ? BUILTIN_ORDER.filter(id=>!dis.includes(id)) : null;
-  return { desks:{ enabled, custom: state.profile.desks.custom||[] }, weights: w(), notes: state.profile.notes||{} };
+  return { desks:{ enabled, custom: state.profile.desks.custom||[] }, weights: w(), notes: state.profile.notes||{}, deskOrder: state.profile.deskOrder||[] };
 }
 async function putProfile(regenerate){
   try{
@@ -341,7 +372,7 @@ function adoptServerProfile(sp){
   if(!sp || !sp.desks) return;
   const enabled = Array.isArray(sp.desks.enabled) ? sp.desks.enabled : null;
   const disabled = enabled ? BUILTIN_ORDER.filter(id=>!enabled.includes(id)) : [];
-  state.profile = { desks:{ disabled, custom: Array.isArray(sp.desks.custom)?sp.desks.custom:[] }, weights: sp.weights||{}, notes: sp.notes||{} };
+  state.profile = { desks:{ disabled, custom: Array.isArray(sp.desks.custom)?sp.desks.custom:[] }, weights: sp.weights||{}, notes: sp.notes||{}, deskOrder: Array.isArray(sp.deskOrder)?sp.deskOrder:[] };
   saveProfile();
 }
 async function loadServerProfile(){
@@ -674,8 +705,7 @@ function render(){
   const settingsHtml = !state.showSettings ? "" : `
     <div class="settings">
       <div class="set-row"><span class="set-label">Desks</span><div class="set-body">
-        ${BUILTIN_ORDER.map(k=>deskRowHtml(k, true)).join("")}
-        ${(state.profile.desks.custom||[]).map(d=>deskRowHtml(d.id, false)).join("")}
+        ${allDesksOrdered().map(id=>deskRowHtml(id, BUILTIN_ORDER.includes(id))).join("")}
         <div class="hint">Each desk shows its personality and how it’s currently leaning, based on what you swipe. Toggle a desk on/off or remove a custom one — changes rebuild your briefing.</div>
         ${state.showAddDesk ? `
           <div class="dform">
@@ -765,6 +795,7 @@ function deskRowHtml(id, builtin){
   const lean = deskLean(id);
   return `<div class="desk ${off?'off':''}">
     <div class="desk-h">
+      <span class="desk-reorder"><button class="desk-move" data-up="${esc(id)}" aria-label="Move up">▲</button><button class="desk-move" data-down="${esc(id)}" aria-label="Move down">▼</button></span>
       <span class="desk-dot" style="background:${info.accent}"></span>
       <span class="desk-name">${esc(info.label)}</span>
       <span class="desk-persona">${esc(persona)}</span>
@@ -800,6 +831,8 @@ function wire(){
   document.querySelectorAll("[data-toggle]").forEach(b=> b.onclick = ()=> toggleBuiltin(b.dataset.toggle));
   document.querySelectorAll("[data-remove]").forEach(b=> b.onclick = ()=> removeCustomDesk(b.dataset.remove));
   document.querySelectorAll(".desk-note").forEach(el=> el.onchange = ()=> setDeskNote(el.getAttribute("data-note"), el.value));
+  document.querySelectorAll("[data-up]").forEach(b=> b.onclick = ()=> moveDesk(b.dataset.up, -1));
+  document.querySelectorAll("[data-down]").forEach(b=> b.onclick = ()=> moveDesk(b.dataset.down, 1));
   document.querySelectorAll("[data-restore]").forEach(b=> b.onclick = ()=> restoreType(b.dataset.restore));
 
   document.querySelectorAll(".card[data-id], .card[data-onboard]").forEach(card=>{

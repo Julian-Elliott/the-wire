@@ -395,7 +395,11 @@ function sanitizeProfile(p) {
       if (id && txt) notes[id] = txt;
     }
   }
-  return { desks: { enabled, custom }, weights, notes };
+  // Reader's preferred desk/filter order (ids).
+  const deskOrder = Array.isArray(p.deskOrder)
+    ? p.deskOrder.map(x => String(x).replace(/[^A-Za-z0-9_-]/g, "").slice(0, 40)).filter(Boolean).slice(0, 60)
+    : null;
+  return { desks: { enabled, custom }, weights, notes, deskOrder };
 }
 
 // in-isolate guard so concurrent hits don't kick off duplicate builds (keyed per user)
