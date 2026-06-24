@@ -205,7 +205,7 @@ const state = {
   profile: loadProfile(),
   data: null, error: null, loading: true, filter: "all",
   showSettings: false, showAddDesk: false, toast: null,
-  read: new Set(),
+  read: new Set(), dismissed: new Set(), cooldown: null,
   seenBefore: (function(){ try{ return localStorage.getItem("jackwire:lastseen")||""; }catch(_){ return ""; } })(),
   onboard: (function(){ try{ return localStorage.getItem("jackwire:onboarded")!=="1"; }catch(_){ return true; } })(),
   auth: { enabled:false, signedIn:false, email:null, name:null },
@@ -261,11 +261,32 @@ function deskLean(id){
   return { head, detail: bits.join(" · ") };
 }
 
+// ---- durable seen/dismissed history (rolling 7 days, keyed by article) -----
+// Mirrors the server's itemKey so a story you've read or dismissed stays gone
+// even when it re-surfaces under a fresh id on a later build or the next day
+// (the per-day `read` set, keyed by ephemeral id, can't do that on its own).
+const normTitleC = t => String(t==null?"":t).toLowerCase().replace(/[^a-z0-9]+/g," ").trim();
+const itemKeyClient = it => (it && it.url && String(it.url).trim())
+  ? "u:"+String(it.url).trim().toLowerCase()
+  : "t:"+((it&&it.category)||"")+"|"+normTitleC(it&&it.title);
+const DISMISS_TTL = 7*24*60*60*1000; // keep dismissals for 7 days
+function readDismissMap(){ try{ return JSON.parse(localStorage.getItem("jackwire:dismissed")||"{}")||{}; }catch(_){ return {}; } }
+function writeDismissMap(m){ try{ localStorage.setItem("jackwire:dismissed", JSON.stringify(m)); }catch(_){} }
+function loadDismissed(){
+  const m = readDismissMap(), cut = Date.now() - DISMISS_TTL, out = {};
+  for(const k in m){ if(m[k] > cut) out[k] = m[k]; } // prune expired
+  writeDismissMap(out);
+  return new Set(Object.keys(out));
+}
+function addDismissed(it){ const k = itemKeyClient(it); if(!k) return; const m = readDismissMap(); m[k] = Date.now(); writeDismissMap(m); state.dismissed.add(k); }
+function undoDismissed(it){ const k = itemKeyClient(it); if(!k) return; const m = readDismissMap(); delete m[k]; writeDismissMap(m); state.dismissed.delete(k); }
+state.dismissed = loadDismissed();
+
 function baseItems(){
   if(!state.data || !state.data.items) return [];
   const disabled = state.profile.desks.disabled||[];
   return state.data.items
-    .filter(i => !state.read.has(i.id))
+    .filter(i => !state.read.has(i.id) && !state.dismissed.has(itemKeyClient(i)))
     .filter(i => !disabled.includes(i.category))
     .filter(i => (w()[i.contentType]||0) > MUTE_FLOOR);
 }
@@ -370,18 +391,18 @@ async function poll(){
 // ---- swipe actions -------------------------------------------------------
 function swipeRight(it){
   bump(it.contentType, 1); bump("desk:"+it.category, .5);
-  state.read.add(it.id); saveRead(); syncWeights(); render();
+  state.read.add(it.id); addDismissed(it); saveRead(); syncWeights(); render();
 }
 function swipeLeft(it){
   bump(it.contentType, -1.5); bump("desk:"+it.category, -.5);
-  state.read.add(it.id); saveRead();
-  state.toast = { msg:`Less like “${it.contentType}”`, undo:{ id:it.id, type:it.contentType, cat:it.category, d:[1.5,.5] } };
+  state.read.add(it.id); addDismissed(it); saveRead();
+  state.toast = { msg:`Less like “${it.contentType}”`, undo:{ id:it.id, it, type:it.contentType, cat:it.category, d:[1.5,.5] } };
   clearTimeout(window.__tt); window.__tt = setTimeout(()=>{ state.toast=null; render(); }, 4200);
   syncWeights(); render();
 }
 function undo(){
   const u = state.toast && state.toast.undo; if(!u) return;
-  state.read.delete(u.id); bump(u.type, u.d[0]); bump("desk:"+u.cat, u.d[1]);
+  state.read.delete(u.id); if(u.it) undoDismissed(u.it); bump(u.type, u.d[0]); bump("desk:"+u.cat, u.d[1]);
   state.toast = null; saveRead(); syncWeights(); render();
 }
 function muteType(t){
@@ -554,7 +575,7 @@ function render(){
       toks.push({t:`${m.title} ${arrow} ${m.changePct||""}`.trim(), c:col});
     });
     if(fixture) toks.push({t:`LFC ◦ ${fixture}`, c:"var(--red)"});
-    order.forEach(k=> toks.push({t:`${c[k]||0} ${cat(k).label}`, c:cat(k).accent}));
+    order.forEach(k=> { if(c[k]) toks.push({t:`${c[k]} ${cat(k).label}`, c:cat(k).accent}); });
   }
   if(!toks.length) toks.push({t: building ? "Building your briefing…" : "Loading the wire…", c:"var(--muted)"});
   const tickerHtml = [...toks,...toks].map(tk=>`<span class="tok"><span class="tok-dot" style="background:${tk.c}"></span><span style="color:${tk.c}">${esc(tk.t)}</span></span>`).join("");
