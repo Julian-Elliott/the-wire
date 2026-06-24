@@ -359,8 +359,15 @@ async function fetchData(force){
 function applyData(data){ state.data = data; hydrateRead(data.date); if(data.items && data.items.length) markSeen(); }
 const isBuilding = d => d && d.generating && (!d.items || !d.items.length);
 
+// A routine refresh takes minutes to land, so lock the Refresh button for ~5 min
+// after a manual refresh (persisted, so a page reload doesn't bypass it).
+const REFRESH_LOCK_MS = 5 * 60 * 1000;
+function refreshLockMsLeft(){ try{ return Math.max(0, (Number(localStorage.getItem("jackwire:refreshlock")) || 0) - Date.now()); }catch(_){ return 0; } }
+function lockRefresh(){ try{ localStorage.setItem("jackwire:refreshlock", String(Date.now() + REFRESH_LOCK_MS)); }catch(_){} }
+
 async function load(force){
   clearTimeout(window.__poll); window.__pollN = 0;
+  if (force) lockRefresh();
   state.loading = true; state.error = null; state.cooldown = null; render();
   try{
     const data = await fetchData(force);
@@ -699,7 +706,7 @@ function render(){
       <div class="mast-r"><div class="date">${longDate()}</div>
         <div class="mast-btns">
           <button class="icbtn" id="cog" aria-label="Settings">⚙</button>
-          <button class="refresh" id="refresh" ${state.loading?"disabled":""}>${state.loading?"Pulling…":"Refresh"}</button>
+          <button class="refresh" id="refresh" ${(state.loading||refreshLockMsLeft()>0)?"disabled":""}>${refreshLockMsLeft()>0?"Refreshing…":(state.loading?"Pulling…":"Refresh")}</button>
         </div></div>
     </header>
     <div class="ticker" aria-hidden="true"><div class="ticker-track">${tickerHtml}</div></div>
@@ -750,8 +757,12 @@ function deskRowHtml(id, builtin){
 function wire(){
   const $ = s => document.getElementById(s);
   $("cog") && ($("cog").onclick = ()=>{ state.showSettings=!state.showSettings; if(!state.showSettings) state.showAddDesk=false; render(); });
-  $("refresh") && ($("refresh").onclick = ()=> load(true));
+  $("refresh") && ($("refresh").onclick = ()=>{ if(refreshLockMsLeft()>0) return; load(true); });
   $("retry") && ($("retry").onclick = ()=> load(true));
+  // While the refresh lock is active, re-render once it expires so the button
+  // flips back to "Refresh" (no per-second tick — the label is static).
+  clearTimeout(window.__rlt);
+  { const left = refreshLockMsLeft(); if(left>0) window.__rlt = setTimeout(render, left + 200); }
   $("undo") && ($("undo").onclick = ()=> undo());
   $("d-new") && ($("d-new").onclick = ()=>{ state.showAddDesk=true; render(); });
   $("d-cancel") && ($("d-cancel").onclick = ()=>{ state.showAddDesk=false; render(); });
