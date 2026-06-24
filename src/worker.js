@@ -662,6 +662,61 @@ async function ttsRender(env, text, voiceId) {
   return new Uint8Array(await res.arrayBuffer());
 }
 
+// In-app reader: fetch an article and pull clean text out of it. Prefers
+// schema.org JSON-LD `articleBody` (clean, common on news sites); falls back to
+// scraping <p> text outside obvious chrome. Only ever called with a URL that
+// came from the feed, so there's no arbitrary-URL SSRF surface.
+async function extractArticle(url) {
+  let res;
+  try {
+    res = await fetch(url, {
+      headers: { "user-agent": "Mozilla/5.0 (compatible; TheWireReader/1.0; +https://desk.databased.business)", "accept": "text/html,application/xhtml+xml" },
+      redirect: "follow", cf: { cacheTtl: 3600, cacheEverything: true },
+    });
+  } catch (_) { throw new Error("could not reach the source"); }
+  if (!res.ok) throw new Error(`source returned ${res.status}`);
+  if (!/text\/html/i.test(res.headers.get("content-type") || "")) throw new Error("not an article page");
+
+  const S = { ld: "", ogTitle: "", site: "", author: "", ttl: "", paras: [], cur: null, skip: 0 };
+  const rw = new HTMLRewriter()
+    .on('script[type="application/ld+json"]', { text(t){ S.ld += t.text; } })
+    .on('meta[property="og:title"]',     { element(e){ if(!S.ogTitle) S.ogTitle = e.getAttribute("content") || ""; } })
+    .on('meta[property="og:site_name"]', { element(e){ if(!S.site)    S.site    = e.getAttribute("content") || ""; } })
+    .on('meta[name="author"]',           { element(e){ if(!S.author)  S.author  = e.getAttribute("content") || ""; } })
+    .on('title', { text(t){ S.ttl += t.text; } })
+    .on('nav, header, footer, aside, figure, figcaption, form, button, script, style, noscript, svg, iframe, [class*="nav"], [class*="menu"], [class*="footer"], [class*="comment"], [class*="related"], [class*="share"], [class*="social"], [class*="cookie"], [class*="newsletter"], [class*="promo"], [class*="advert"], [class*="sidebar"], [class*="recirc"]', {
+      element(e){ S.skip++; e.onEndTag(() => { if (S.skip > 0) S.skip--; }); }
+    })
+    .on('p', {
+      element(e){ if (S.skip > 0) { S.cur = null; return; } S.cur = ""; e.onEndTag(() => { if (S.cur != null) { const x = S.cur.replace(/\s+/g, " ").trim(); if (x.length > 45) S.paras.push(x); } S.cur = null; }); },
+      text(t){ if (S.cur != null && S.skip === 0) S.cur += t.text; }
+    });
+  await rw.transform(res).arrayBuffer();
+
+  let ldBody = "", ldHead = "";
+  for (const block of S.ld.split(/(?<=})\s*(?=\{)|(?<=\])\s*(?=\{)/)) {
+    try {
+      const j = JSON.parse(block);
+      const arr = Array.isArray(j) ? j : (j["@graph"] ? j["@graph"] : [j]);
+      for (const n of arr) {
+        if (!n || typeof n !== "object") continue;
+        if (!ldBody && typeof n.articleBody === "string") ldBody = n.articleBody;
+        if (!ldHead && typeof n.headline === "string") ldHead = n.headline;
+      }
+    } catch (_) {}
+  }
+  const title = deDash(ldHead || S.ogTitle || S.ttl || "").replace(/\s+/g, " ").trim().slice(0, 300);
+  let paragraphs = [];
+  if (ldBody) paragraphs = ldBody.split(/\n+/).map(s => s.replace(/\s+/g, " ").trim()).filter(s => s.length > 40);
+  if (paragraphs.length < 3 && S.paras.length > paragraphs.length) paragraphs = S.paras;
+
+  const seen = new Set(), clean = [];
+  for (const p of paragraphs) { const k = p.slice(0, 80); if (seen.has(k)) continue; seen.add(k); clean.push(deDash(p)); if (clean.length >= 120) break; }
+  if (!clean.length) throw new Error("no readable text found");
+  let host = ""; try { host = new URL(url).hostname.replace(/^www\./, ""); } catch (_) {}
+  return { title, siteName: (S.site || host).trim().slice(0, 80), byline: deDash(S.author || "").trim().slice(0, 120), paragraphs: clean, url, host };
+}
+
 // Trust the desk id supplied per item; assign our own ids and clamp lengths.
 function normalizeIngest(items) {
   return (items || [])
@@ -1011,6 +1066,28 @@ export default {
         ctx.waitUntil(env.WIRE_AUDIO.put(key, bytes, { httpMetadata: { contentType: "audio/mpeg" } }));
         return new Response(bytes, { headers: { "content-type": "audio/mpeg", "cache-control": "public, max-age=86400" } });
       } catch (e) { return json({ error: "audio render failed", detail: String(e) }, 502); }
+    }
+
+    // In-app reader view: clean article text so the user never leaves the site.
+    // GET /api/read/<itemId> → looks the item up in the caller's feed, fetches
+    // its URL, extracts readable text, caches the result in KV for a day.
+    if (url.pathname.startsWith("/api/read/") && request.method === "GET") {
+      try {
+        const itemId = decodeURIComponent(url.pathname.slice("/api/read/".length));
+        const t = await resolveTarget(env, headerUid);
+        let feed = await readJSON(env, t.writeKeys.latest);
+        let item = feed && Array.isArray(feed.items) ? feed.items.find(i => i.id === itemId) : null;
+        if (!item && t.key !== "shared") { const sh = await readJSON(env, SHARED_KEY); item = sh && Array.isArray(sh.items) ? sh.items.find(i => i.id === itemId) : null; }
+        if (!item || !item.url) return json({ error: "article not found" }, 404);
+        if (!/^https?:\/\//i.test(item.url)) return json({ error: "no readable link" }, 422);
+        const ckey = `read:${await sha16(item.url)}`;
+        const cached = env.WIRE_KV ? await readJSON(env, ckey) : null;
+        if (cached) return json(cached);
+        const article = await extractArticle(item.url);
+        article.source = item.source || article.host || "";
+        if (env.WIRE_KV) ctx.waitUntil(env.WIRE_KV.put(ckey, JSON.stringify(article), { expirationTtl: 60 * 60 * 24 }));
+        return json(article);
+      } catch (e) { return json({ error: "reader unavailable", detail: String(e) }, 502); }
     }
 
     // Daily multi-host podcast. The routine writes the script into the shared
