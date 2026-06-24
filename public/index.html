@@ -770,7 +770,7 @@ function render(){
         </div></div>
     </header>
     ${settingsHtml}
-    <section class="hero"><h2 class="hello">${greeting()}${state.auth.name?`, ${esc(state.auth.name)}`:""}.</h2><p class="sum">${esc(sumLine)}${nNew?`${sumLine?" · ":""}<span style="color:var(--amber)">${nNew} new</span>`:""}</p></section>
+    ${(sumLine || nNew) ? `<section class="hero"><p class="sum">${esc(sumLine)}${nNew?`${sumLine?" · ":""}<span style="color:var(--amber)">${nNew} new</span>`:""}</p></section>` : ""}
     <nav class="filters">${filterBtns}</nav>
     <main class="feed">${onboardHtml}${feedHtml}</main>
     <footer class="foot">British English, £, no ads, no comment columns. Your desks, each with its own voice — swipe to tune them. Refreshed through the day, newest at the top.${pulled}</footer>
