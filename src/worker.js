@@ -344,6 +344,17 @@ function mergeItems(prior, fresh) {
 const SHARED_KEY = "briefing:latest";
 const userBriefKey = u => `briefing:user:${u}`;
 const profileKey = u => `profile:${u}`;
+
+// Personalisation requires an Apple session. We stamp a short-lived "active" key
+// per signed-in user on each request; a user who goes quiet for ACTIVE_TTL drops
+// off personalised builds (served the shared feed) and their per-user feed is
+// left to expire. Bounds storage + cost from churned/abusive accounts.
+const activeKey = u => `active:${u}`;
+const ACTIVE_TTL = 48 * 60 * 60;             // 48h inactivity → off personalised builds
+const USER_FEED_TTL = 60 * 60 * 60;          // per-user feed storage backstop (ACTIVE_TTL + grace)
+async function touchActive(env, uid) {
+  if (env.WIRE_KV && uid) { try { await env.WIRE_KV.put(activeKey(uid), String(Math.floor(Date.now() / 1000)), { expirationTtl: ACTIVE_TTL }); } catch (_) {} }
+}
 const cleanUid = u => (typeof u === "string" && /^[A-Za-z0-9_-]{8,64}$/.test(u)) ? u : null;
 // Looser check for the trusted ingest path: also accepts the "apple:<sub>"
 // session id form (colons + dots) that cleanUid (anonymous ids only) rejects,
@@ -472,15 +483,22 @@ const json = (obj, status = 200) =>
   });
 
 // Resolve which cache/build a request targets: a personalised one if the user
-// has saved a non-empty profile, otherwise the shared briefing.
-async function resolveTarget(env, u) {
+// has a customised profile AND is currently active (signed-in caller this
+// request, or stamped active within ACTIVE_TTL). Otherwise the shared briefing.
+// `liveActive` is true when the target is the signed-in caller themselves, so a
+// just-returned user gets personalised immediately without waiting for KV
+// read-after-write consistency on the active stamp.
+async function resolveTarget(env, u, liveActive) {
   if (u) {
     const profile = await readJSON(env, profileKey(u));
     if (isCustomised(profile)) {
-      return {
-        profile, key: `u:${u}`,
-        writeKeys: { latest: userBriefKey(u), snapshot: `${userBriefKey(u)}:${londonDate()}` },
-      };
+      const active = liveActive || (env.WIRE_KV ? await env.WIRE_KV.get(activeKey(u)) : null);
+      if (active) {
+        return {
+          profile, key: `u:${u}`,
+          writeKeys: { latest: userBriefKey(u), snapshot: `${userBriefKey(u)}:${londonDate()}` },
+        };
+      }
     }
   }
   return {
@@ -742,7 +760,11 @@ async function ingestBriefing(env, payload, target) {
 
   const out = { date: londonDate(), generatedAt: stamp, slot, items, fixture, report, desks, podcast, source: "routine" };
   if (env.WIRE_KV) {
-    await env.WIRE_KV.put(writeKeys.latest, JSON.stringify(out));
+    // The shared feed lives forever; a per-user feed expires if its owner goes
+    // quiet (refreshed on every rebuild while they're active), so churned/abusive
+    // accounts don't accumulate permanent per-user feeds.
+    const isUser = !!(target && target.latest);
+    await env.WIRE_KV.put(writeKeys.latest, JSON.stringify(out), isUser ? { expirationTtl: USER_FEED_TTL } : undefined);
     if (writeKeys.snapshot) await env.WIRE_KV.put(writeKeys.snapshot, JSON.stringify(out), { expirationTtl: 60 * 60 * 24 * 5 });
   }
   return out;
@@ -908,6 +930,9 @@ export default {
     // A signed-in user's id (from the session cookie) overrides the anonymous one.
     const sUid = await sessionUid(env, request);
     const headerUid = sUid || queryUid;
+    // Stamp the signed-in user as active (rolling 48h); resolveTarget uses this
+    // to drop quiet users off personalised builds. Fire-and-forget.
+    if (sUid) ctx.waitUntil(touchActive(env, sUid));
 
     // ---- Sign in with Apple endpoints (no-ops unless configured) ----------
     if (url.pathname === "/api/me") {
@@ -979,6 +1004,9 @@ export default {
       catch (e) { return json({ error: "catalogue failed", detail: String(e) }, 500); }
     }
     if (url.pathname === "/api/desk-preview" && request.method === "POST") {
+      // Personalising is a signed-in feature, and this calls the metered Claude
+      // API — so require an Apple session (no anonymous, unthrottled cost vector).
+      if (!sUid) return json({ error: "Sign in with Apple to build your own desks." }, 401);
       try {
         let body = {}; try { body = await request.json(); } catch (_) {}
         const preview = await deskPreview(env, body.topic);
@@ -996,7 +1024,7 @@ export default {
       try {
         const itemId = decodeURIComponent(url.pathname.slice("/api/listen/".length));
         if (!itemId) return json({ error: "missing item id" }, 400);
-        const t = await resolveTarget(env, headerUid);
+        const t = await resolveTarget(env, headerUid, !!sUid);
         let feed = await readJSON(env, t.writeKeys.latest);
         let item = feed && Array.isArray(feed.items) ? feed.items.find(i => i.id === itemId) : null;
         if (!item && t.key !== "shared") { const sh = await readJSON(env, SHARED_KEY); item = sh && Array.isArray(sh.items) ? sh.items.find(i => i.id === itemId) : null; }
@@ -1037,7 +1065,7 @@ export default {
 
     if (url.pathname === "/api/today") {
       try {
-        const t = await resolveTarget(env, headerUid);
+        const t = await resolveTarget(env, headerUid, !!sUid);
         const cached = await readJSON(env, t.writeKeys.latest);
         // A completed build for today is fresh even if it produced zero items
         // (e.g. web search disabled → empty desks). `generatedAt` is only set by
@@ -1078,7 +1106,7 @@ export default {
     if (url.pathname === "/api/refresh" && request.method === "POST") {
       try {
         let body = {}; try { body = await request.json(); } catch (_) {}
-        const t = await resolveTarget(env, sUid || cleanUid(body.userId) || queryUid);
+        const t = await resolveTarget(env, sUid || cleanUid(body.userId) || queryUid, !!sUid);
         // When the Claude Routine owns generation, refresh fires its API trigger
         // (subscription-billed) instead of a metered Anthropic API build — for
         // the shared feed AND a signed-in user's personalised desks (the routine
@@ -1129,12 +1157,12 @@ export default {
     if (url.pathname === "/api/profile" && (request.method === "PUT" || request.method === "POST")) {
       try {
         let body = {}; try { body = await request.json(); } catch (_) {}
-        // Writes are bound to the caller: a signed-in session always writes its
-        // own profile (sUid wins; body.userId is ignored), so it can't overwrite
-        // another user's. Anonymous writes are keyed by the caller's own uid
-        // (the capability). cleanUid keeps anon ids to the safe charset.
-        const u = sUid || cleanUid(body.userId);
-        if (!u) return json({ error: "missing or invalid userId" }, 400);
+        // Personalising requires an Apple session. This kills the anonymous-flood
+        // vector (random uids writing unbounded permanent profiles + firing the
+        // routine); the profile is always keyed to the signed-in user, so it
+        // can't overwrite anyone else's and body.userId is ignored.
+        const u = sUid;
+        if (!u) return json({ error: "Sign in with Apple to build your own desks." }, 401);
         const profile = sanitizeProfile(body.profile);
         if (env.WIRE_KV) await env.WIRE_KV.put(profileKey(u), JSON.stringify(profile));
         // Only regenerate when the desk SET changes (not on every swipe sync).

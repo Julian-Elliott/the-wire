@@ -405,9 +405,12 @@ function profileForServer(){
   return { desks:{ enabled, custom: state.profile.desks.custom||[] }, weights: w(), notes: state.profile.notes||{}, deskOrder: state.profile.deskOrder||[] };
 }
 async function putProfile(regenerate){
+  // Personalising is a signed-in feature now; anon tuning stays local-only so we
+  // don't fire 401s at the server. The shared feed still works for everyone.
+  if(!state.auth.signedIn) return;
   try{
     await fetch("/api/profile", { method:"PUT", headers:{"content-type":"application/json"},
-      body: JSON.stringify({ userId: state.uid, profile: profileForServer(), regenerate: !!regenerate }) });
+      body: JSON.stringify({ profile: profileForServer(), regenerate: !!regenerate }) });
   }catch(_){}
 }
 
@@ -535,6 +538,7 @@ function toggleBuiltin(id){
 function addCustomDesk(label, topic, voice){
   topic = (topic||"").trim(); label = (label||"").trim() || topic.slice(0,28);
   if(!topic) return;
+  if(!state.auth.signedIn){ state.toast={msg:"Sign in with Apple to add your own desks"}; render(); clearTimeout(window.__tt); window.__tt=setTimeout(()=>{state.toast=null;render();},3500); return; }
   const id = "c"+Math.random().toString(36).slice(2,8);
   state.profile.desks.custom.push({ id, label, topic, voice:(voice||"").trim(), voiceName:label, types:[] });
   state.showAddDesk = false;
@@ -637,6 +641,7 @@ function wirePicker(){
 }
 async function runPreview(topic){
   topic = (topic||"").trim(); if(!topic) return;
+  if(!state.auth.signedIn){ state.preview = { topic, error:"Sign in with Apple to design and keep your own desks." }; renderPicker(); return; }
   state.preview = { topic, loading:true }; renderPicker();
   try{
     const r = await fetch("/api/desk-preview", { method:"POST", headers:{"content-type":"application/json"}, body: JSON.stringify({ topic }) });
