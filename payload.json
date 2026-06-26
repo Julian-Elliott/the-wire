@@ -1,0 +1,249 @@
+{
+  "fixture": "Liverpool vs Sunderland, Fri, 25 Jul",
+  "items": [
+    {
+      "category": "world",
+      "title": "UK records hottest June day ever as heatwave hits 36.7C",
+      "summary": "Britain hit 36.7C in Somerset on Wednesday, breaking the June temperature record, with red health alerts, school closures and NHS strain across England.",
+      "why": "This heatwave is more dangerous than 2022's record event because high humidity raises heat illness risk even for healthy adults, and NHS hospitals are under severe strain.",
+      "readout": "Britain broke its June temperature record after the mercury reached 36.7 degrees Celsius in Merryfield, Somerset on Wednesday, surpassing a mark that had stood since 1957. A red heat-health alert remains in force across large parts of England, covering London, the South East, South West, East of England, and the Midlands. More than a thousand schools closed early or sent pupils home, and the London Ambulance Service responded to a record 642 life-threatening calls in a single day. The NHS declared critical incidents at several hospitals after equipment failures in the heat. Meteorologists warn this heatwave is more dangerous than the 2022 record event because high humidity prevents sweat from evaporating, meaning body temperatures rise faster.",
+      "contentType": "News",
+      "source": "ITV News",
+      "url": "https://www.itv.com/news/2026-06-24/uk-braced-for-record-breaking-40c-as-red-weather-warnings-come-into-force"
+    },
+    {
+      "category": "world",
+      "title": "Royal Marines seize Russian shadow fleet tanker in English Channel",
+      "summary": "Royal Marine Commandos boarded and detained a sanctioned Russian oil tanker in the Channel on 14 June, the first such seizure by UK forces.",
+      "why": "Britain is in a direct physical standoff with Russia in home waters, with civilians and military vessels caught in an escalating confrontation over sanctions enforcement on Russian oil.",
+      "readout": "Royal Marine Commandos and National Crime Agency officers boarded and detained the sanctioned oil tanker Smyrtos in the English Channel on 14 June, the first time Britain has physically seized a vessel from Russia's shadow fleet. The operation was backed by the Royal Navy frigate HMS Sutherland and an RAF Poseidon patrol aircraft. Two days later, a Russian warship fired warning shots near a British yacht sailed by a retired couple roughly 20 nautical miles south of the Isle of Wight, in what appeared to be retaliation. Russia has since begun escorting shadow fleet tankers through the Channel in armed naval convoys, significantly raising tensions.",
+      "contentType": "News",
+      "source": "GOV.UK",
+      "url": "https://www.gov.uk/government/news/uk-forces-intercept-russian-shadow-fleet-vessel-for-the-first-time-in-blow-to-putins-war-chest"
+    },
+    {
+      "category": "world",
+      "title": "World Cup 2026: Scotland eliminated as England and France reach last-16 deciders",
+      "summary": "Scotland were knocked out of the 2026 World Cup by Brazil, while England and France's last-16 places are still being decided today.",
+      "why": "The 2026 World Cup is dominating sporting conversation across the UK, with Scotland's first tournament since 1998 ending in disappointment and millions watching England and France's final group games.",
+      "readout": "Scotland's first FIFA World Cup since 1998 came to a painful end after Vinicius Junior scored twice in a 3-0 defeat by Brazil on 24 June, ending any hope of reaching the last 16. England's group stage fate is still to be decided as the tournament enters its final round of fixtures today. France face Norway in what promises to be one of the matches of the group stage, with Kylian Mbappe already having scored four goals in two games. Germany suffered a shock 2-1 defeat by Ecuador this week, underlining how competitive the expanded 48-team tournament has become.",
+      "contentType": "News",
+      "source": "Sky Sports",
+      "url": "https://www.skysports.com/football/news/12098/13554985/world-cup-2026-scotland-0-3-brazil-vinicius-junior-shines-as-scots-punished-to-leave-progression-dream-in-doubt"
+    },
+    {
+      "category": "markets",
+      "title": "Sterling recovers as Burnham pledges fiscal discipline after Starmer resignation",
+      "summary": "Keir Starmer resigned as Prime Minister on 22 June; frontrunner Andy Burnham steadied sterling and gilts by committing to hold the existing fiscal rules.",
+      "why": "Political leadership transitions move gilt yields, sterling, and domestic equity valuations. Burnham's fiscal commitment prevented a sharper sell-off, but the risk of a looser stance remains.",
+      "readout": "Keir Starmer resigned as Prime Minister on 22 June, becoming the eighth Prime Minister to leave office since Brexit. Initial market nerves sent sterling below 1.32 dollars and pushed gilt yields higher. However, the situation stabilised quickly once Andy Burnham, the frontrunner to succeed Starmer, confirmed he would not loosen the existing fiscal rules. Sterling recovered to around 1.34 dollars, the 10-year gilt yield pulled back toward 4.78 per cent, and the FTSE 100 closed broadly flat. Markets appear to be treating this as a reshuffle rather than a rupture, though the risk of a more expansionary fiscal stance remains if Burnham faces pressure from the Labour left.",
+      "contentType": "News",
+      "source": "Pound Sterling Live",
+      "url": "https://www.poundsterlinglive.com/gbp-live-today/23305-pound-sterling-in-strong-comeback-as-burnham-commits-to-fiscal-rules",
+      "direction": "up",
+      "changePct": "+0.8%"
+    },
+    {
+      "category": "markets",
+      "title": "OpenAI IPO delay report triggers AI sell-off, Nasdaq on course for worst week in a year",
+      "summary": "Reports that OpenAI will delay its IPO to 2027 triggered a tech sell-off, putting the Nasdaq on course for a 4% weekly loss.",
+      "why": "Tech and AI names dominate the MSCI World and S&P 500. A sustained rotation out of AI stocks would drag global equity allocations in any multi-asset ISA.",
+      "readout": "A New York Times report this week suggested OpenAI is leaning toward delaying its IPO until 2027, spooked by SpaceX's volatile debut and persistent concerns about cash burn. The news reignited a sell-off in AI and chip stocks, with the Nasdaq heading for a four per cent weekly loss, its worst performance in over a year. The S&P 500 is down more than one per cent on the week. The FTSE 100 has been more resilient, lifted by its heavier weighting in industrials, energy, and financials. For a globally diversified ISA investor, the question is whether this is a healthy rotation away from stretched AI valuations or a broader de-rating of growth assets.",
+      "contentType": "Analysis",
+      "source": "Yahoo Finance",
+      "url": "https://finance.yahoo.com/technology/article/ai-trade-hits-a-wall-amid-report-that-openai-will-delay-ipo-until-2027-150642366.html",
+      "direction": "down",
+      "changePct": "-4.0%"
+    },
+    {
+      "category": "markets",
+      "title": "Bank of England holds at 3.75% but July hike now priced in by markets",
+      "summary": "The Bank of England held Bank Rate at 3.75% by a 7-2 vote; markets now price a hike as soon as the July meeting.",
+      "why": "Higher-for-longer rates compress bond valuations and raise the discount rate on global equities, adding a headwind to growth-heavy ISA allocations.",
+      "readout": "The Bank of England held Bank Rate at 3.75 per cent at its June meeting, but the vote was closer than expected at 7-2, with two members already pushing for an immediate rise to four per cent. The Federal Reserve also held rates but revised its projections upward, with nine of eighteen officials now expecting at least one hike this year. UK inflation sits at 2.8 per cent and is expected to climb further as energy bills rise from July. Markets are now pricing a Bank of England hike as soon as the July meeting. For ISA investors, elevated gilt yields and a potentially tighter financial backdrop add a headwind to rate-sensitive sectors such as property and utilities.",
+      "contentType": "Analysis",
+      "source": "CNBC",
+      "url": "https://www.cnbc.com/2026/06/17/fed-interest-rate-decision-june-2026.html",
+      "direction": "flat",
+      "changePct": null
+    },
+    {
+      "category": "liverpool",
+      "title": "Andoni Iraola appointed Liverpool head coach on two-year deal",
+      "summary": "Former Bournemouth boss Andoni Iraola has signed a two-year deal as Liverpool's new head coach, replacing the departed Arne Slot.",
+      "why": "The managerial appointment defines Liverpool's next chapter, shaping playing style and transfer targets, with Iraola's high-intensity pressing football set to reshape the squad.",
+      "readout": "Liverpool have confirmed Andoni Iraola as their new head coach on a two-year deal, ending the search for Arne Slot's successor. The Spaniard, 43, impressed greatly during three seasons at Bournemouth, guiding them into European football for the first time in the club's history. Liverpool moved decisively once Slot had departed, with Iraola said to be the only candidate formally spoken to. His aggressive, front-footed style is believed to be the right fit for the next chapter at Anfield. His first competitive match will be a trip to Newcastle United in August.",
+      "contentType": "News",
+      "source": "Sky Sports",
+      "url": "https://www.skysports.com/football/news/11669/13550174/andoni-iraola-liverpool-appoint-former-bournemouth-boss-as-arne-slots-successor-on-two-year-deal"
+    },
+    {
+      "category": "liverpool",
+      "title": "Liverpool agree personal terms with record-target Yan Diomande",
+      "summary": "Liverpool have agreed personal terms with RB Leipzig winger Yan Diomande, but a club-to-club fee above £100 million remains to be settled.",
+      "why": "The 19-year-old World Cup star would arrive as a direct replacement for Mohamed Salah in what could be a Premier League record deal, defining Liverpool's attacking future.",
+      "readout": "Liverpool are closing in on a potential club-record signing after agreeing personal terms with Yan Diomande, the 19-year-old Ivory Coast winger currently starring at the 2026 World Cup. The RB Leipzig forward has been one of the tournament's standout players and would arrive as a direct replacement for Mohamed Salah. The sticking point remains the fee, with Leipzig believed to want upwards of £112 million. PSG are also circling, so Liverpool will need to move quickly to get a deal over the line this summer.",
+      "contentType": "News",
+      "source": "Liverpool FC",
+      "url": "https://www.liverpoolfc.com/news/liverpool-have-agreement-yan-diomande-and-one-step-away-record-breaking-deal-report"
+    },
+    {
+      "category": "liverpool",
+      "title": "Bradley Barcola keen on Liverpool move as PSG contract talks stall",
+      "summary": "PSG winger Bradley Barcola is reportedly excited by Liverpool's project under Iraola, with his contract talks at the French club at a standstill.",
+      "why": "Barcola could join alongside Diomande to form a new attacking partnership, giving Liverpool two world-class wingers to fill the void left by Mohamed Salah.",
+      "readout": "Liverpool have received a further boost in their summer rebuild after reports emerged that PSG winger Bradley Barcola is keen on joining the Reds under new head coach Andoni Iraola. Contract negotiations between Barcola and Paris Saint-Germain have reached an impasse, with the French champions potentially open to a sale. Arsenal have also registered interest, but Liverpool's project appears to be the more attractive proposition for the 23-year-old. A deal for Barcola is believed to be separate from the Diomande pursuit, meaning Liverpool could potentially land both attackers this summer.",
+      "contentType": "News",
+      "source": "liverpool.com",
+      "url": "https://www.liverpool.com/liverpool-fc-news/transfer-news/liverpool-transfer-news-reds-receive-34175712"
+    },
+    {
+      "category": "gaming",
+      "title": "Xbox Reset: Craig Duncan resigns as mass layoffs loom and Compulsion Games faces closure",
+      "summary": "Xbox Game Studios head Craig Duncan has resigned, with mass layoffs expected after 30 June and award-winning studio Compulsion Games reportedly facing closure.",
+      "why": "This is the biggest crisis in Xbox's history since the Activision acquisition, with hundreds of developers facing redundancy and studio closures signalling a fundamental rethink of Microsoft's gaming ambitions.",
+      "readout": "Xbox is heading for its most significant restructuring since acquiring Activision Blizzard, as head of Xbox Game Studios Craig Duncan resigned this week ahead of expected mass layoffs. The cuts, described internally as an Xbox Reset, are expected to land after the financial year closes on 30 June and could affect around a thousand roles. Award-winning developer Compulsion Games, maker of South of Midnight, is reportedly among the studios facing closure despite the game winning a Peabody Award. The crisis has been driven by a profit margin that has fallen to just three per cent, with pressure to reduce costs across consoles, Game Pass, and cloud gaming.",
+      "contentType": "News",
+      "source": "Kotaku",
+      "url": "https://kotaku.com/the-head-of-xbox-game-studios-resigns-ahead-of-mass-layoffs-2000706634"
+    },
+    {
+      "category": "gaming",
+      "title": "EA confirms third wave of layoffs as £43 billion Saudi-backed buyout moves forward",
+      "summary": "Electronic Arts has cut staff in a third round of layoffs as its £43 billion Saudi-backed acquisition moves toward its 30 June deadline.",
+      "why": "If completed, the EA buyout would be the largest leveraged takeover in gaming history, and the redundancies signal management is already restructuring to meet the deal's financial requirements.",
+      "readout": "Electronic Arts has confirmed a third wave of redundancies in 2026, affecting roles in customer support, trust and safety, and IT across the United States and India. The cuts come as a £43 billion takeover bid led by Saudi Arabia's Public Investment Fund, Silver Lake, and Affinity Partners moves toward its planned completion deadline at the end of June. EA shareholders approved the deal earlier this month. The company says it is shifting focus from high-risk licensed single-player titles toward live-service games and proprietary franchises. If completed, it would be the largest leveraged buyout in gaming history.",
+      "contentType": "News",
+      "source": "Game Rant",
+      "url": "https://gamerant.com/ea-layoffs-june-2026/"
+    },
+    {
+      "category": "gaming",
+      "title": "Star Fox returns on Switch 2 after decade away, to positive reviews",
+      "summary": "Nintendo's Star Fox has returned on Switch 2, ending a 10-year absence with a ground-up remake of Star Fox 64 to positive reviews.",
+      "why": "The Star Fox series has been dormant since 2016. This Switch 2 exclusive signals Nintendo's intent to revive classic franchises, and early reviews suggest it has been worth the wait.",
+      "readout": "Nintendo's Star Fox series has returned from a decade-long absence with a new game on Switch 2, developed by Velan Studios and launching this week to positive reviews. The title is a ground-up remake of the classic Star Fox 64, with critics describing it as the definitive version of the game. It is the first Star Fox release since Star Fox Zero in 2016, and arrives as one of the Switch 2's first major exclusive titles. A free demo was available on the eShop ahead of launch. The game also ties in with a new Tetris 99 crossover event running from 10 July.",
+      "contentType": "News",
+      "source": "Nintendo Life",
+      "url": "https://www.nintendolife.com/news/2026/05/star-fox-is-finally-getting-another-game-out-june-2026-exclusively-on-switch-2"
+    },
+    {
+      "category": "ev",
+      "title": "Energy bills rise 13% from July, but smart EV overnight tariffs hold at 7p per kWh",
+      "summary": "Ofgem's 13% price cap rise from July pushes bills to £1,862 a year, making overnight smart EV tariffs more valuable than ever.",
+      "why": "Standard electricity is getting 13% more expensive, but smart overnight EV tariffs hold at around 7p per kWh, a gap worth over £300 a year for typical EV drivers.",
+      "readout": "Ofgem has confirmed that energy bills will rise by 13 per cent from the first of July, pushing the typical annual household bill to one thousand, eight hundred and sixty-two pounds. The bad news for most households is actually good news for smart EV owners. Tariffs like Intelligent Octopus Go and E.ON Next Drive charge as little as seven pence per kilowatt hour overnight, compared with around 27 pence during the day under the new cap. Shifting your charging to overnight hours could save a typical EV driver well over three hundred pounds a year. You will need a working smart meter to take advantage.",
+      "contentType": "News",
+      "source": "Ofgem",
+      "url": "https://www.ofgem.gov.uk/press-release/energy-price-cap-will-rise-13-july"
+    },
+    {
+      "category": "ev",
+      "title": "Kia EV4 joins top government grant tier, cutting UK price to £30,995",
+      "summary": "The Kia EV4 Air and Motion now qualify for the full £3,750 electric car grant, bringing the starting price down to £30,995.",
+      "why": "This makes the EV4 one of the best-value mid-sized family electric cars available, undercutting many smaller rivals in price after the government grant is applied.",
+      "readout": "The Kia EV4 has jumped to the top tier of the government's Electric Car Grant following a reassessment of its battery sustainability credentials this June. Buyers of the Air and Motion versions can now knock a full three thousand, seven hundred and fifty pounds off the price, bringing the entry-level EV4 Air down to thirty thousand, nine hundred and ninety-five pounds on the road. Only the Air and Motion trims qualify, not the GT-Line versions. If you are considering a mid-sized family electric car, this makes the EV4 one of the strongest value propositions currently available.",
+      "contentType": "News",
+      "source": "Autocar",
+      "url": "https://www.autocar.co.uk/car-news/electric-cars/kia-ev4-hatch-now-cheaper-smaller-ev3-due-upgraded-grant"
+    },
+    {
+      "category": "ev",
+      "title": "Home EV charger grant rises to £500 and now covers renters and flat owners",
+      "summary": "The government's home EV charger grant rose from £350 to £500 from 1 April and now covers renters and flat owners with parking spaces.",
+      "why": "For the first time, renters and flat owners can claim government money toward a home charger, potentially cutting charging costs to as little as 7p per kWh overnight.",
+      "readout": "The government's home EV charger grant increased from three hundred and fifty pounds to five hundred pounds per socket on the first of April, and it now covers renters and flat owners for the first time. You will need a private or allocated parking space and permission from your landlord or freeholder to apply. The grant covers 75 per cent of the purchase and installation cost, up to five hundred pounds. A typical home wallbox charger costs between nine hundred and sixteen hundred pounds fully installed. The scheme runs until March 2027, so there is no immediate rush, but it is worth booking before the deadline.",
+      "contentType": "News",
+      "source": "GOV.UK",
+      "url": "https://www.gov.uk/guidance/changes-to-electric-vehicle-chargepoint-grant-schemes-from-1-april-2026"
+    },
+    {
+      "category": "worcester",
+      "title": "Worcestershire County Council avoids bankruptcy with £74 million emergency bailout",
+      "summary": "Worcestershire County Council secured £74 million in emergency government support, narrowly avoiding a formal bankruptcy notice for the 2026/27 financial year.",
+      "why": "Residents face higher council tax and reduced services, with cuts expected to hit social care, roads, and school transport, and a £297 million funding gap projected by 2029.",
+      "readout": "Worcestershire County Council has secured emergency government support to plug a £74 million shortfall in its 2026/27 budget, narrowly avoiding having to issue a Section 114 notice, which is effectively a declaration of insolvency. The crisis has been driven by soaring demand for adult and children's social care, combined with inflation and rising National Living Wage costs that are outpacing government grants. The council received £59.9 million through a government capitalisation directive and permission to raise council tax above the usual cap. The longer-term picture is even more challenging, with a cumulative funding gap of £297 million projected by 2029, meaning difficult decisions about services are likely for years to come.",
+      "contentType": "News",
+      "source": "Worcestershire County Council",
+      "url": "https://www.worcestershire.gov.uk/council-services/council-and-democracy/council-finance/budget-setting-202627"
+    },
+    {
+      "category": "worcester",
+      "title": "Government to decide Worcestershire's council future in July",
+      "summary": "A July government announcement will determine whether Worcestershire becomes one or two new unitary councils, replacing all existing authorities by April 2028.",
+      "why": "Every Worcestershire resident will see their local council replaced entirely within two years, changing who runs everything from bin collections to planning and social care.",
+      "readout": "The government is expected to announce in July which model of local government reorganisation it will impose on Worcestershire, following a public consultation that closed earlier this year. Two options are on the table: a two-unitary plan backed by Worcester City and four district councils, or a single-authority model backed by the county council and Wyre Forest. A survey found 48 per cent of residents preferred the two-unitary option, with 29 per cent backing a single council. Whichever model is chosen, a shadow council election will follow in May 2027, with the new structure taking over all services in April 2028. The changes are also tied to plans for a directly elected mayor for the wider region.",
+      "contentType": "News",
+      "source": "Worcester Observer",
+      "url": "https://worcesterobserver.co.uk/news/worcester-city-councillors-to-decide-on-best-option-for-local-government-reorganisation/"
+    },
+    {
+      "category": "worcester",
+      "title": "Rail fares frozen for first time in 30 years, saving Worcestershire commuters hundreds",
+      "summary": "Regulated rail fares across England are frozen for 2026/27, the first time in 30 years, saving passengers a combined £600 million this year.",
+      "why": "Worcestershire commuters travelling to Birmingham or London by season ticket pay the same as last year, with fares that would otherwise have risen by 5.8 per cent instead held flat.",
+      "readout": "Regulated rail fares across England are frozen for 2026/27, the first time in three decades that commuters have not faced a price rise on their season tickets and peak returns. The government says the freeze will save passengers a combined £600 million this year, with individual commuters saving hundreds of pounds depending on their route. For Worcestershire residents commuting to Birmingham or London, the freeze means no extra cost on fares that would otherwise have risen by 5.8 per cent. The freeze covers season tickets and peak commuter fares, though unregulated advance and first-class tickets are not included.",
+      "contentType": "News",
+      "source": "GOV.UK",
+      "url": "https://www.gov.uk/government/news/passengers-save-millions-as-rail-fare-freeze-starts"
+    }
+  ],
+  "podcast": [
+    {
+      "desk": "world",
+      "text": "[warm] Good morning and welcome to The Wire. I'm your World desk, and today is a busy one. Britain has just broken its June temperature record, with 36.7 degrees Celsius recorded in Somerset on Wednesday, and red health alerts are still in place across large parts of England."
+    },
+    {
+      "desk": "worcester",
+      "text": "[thoughtful] And here in Worcestershire, that heat is very much being felt. Schools sent children home early this week, and the county is already dealing with its own financial pressures, after narrowly avoiding a £74 million bankruptcy that could have forced a Section 114 notice."
+    },
+    {
+      "desk": "world",
+      "text": "It has been quite a week for domestic news. On top of the heatwave, Keir Starmer resigned as Prime Minister on Monday. He became the eighth PM to leave office since Brexit, and markets spent Tuesday in quite a spin."
+    },
+    {
+      "desk": "markets",
+      "text": "[measured] Quite a spin is right. Sterling dropped below 1.32 dollars initially, and gilt yields lurched higher. But Andy Burnham moved fast, pledging to hold the existing fiscal rules, and that steadied things considerably. Sterling is back above 1.34, and the FTSE 100 managed to close broadly flat on Tuesday."
+    },
+    {
+      "desk": "markets",
+      "text": "The other big markets story this week is the OpenAI IPO delay. Reports emerged they are leaning toward pushing the float to 2027, and that sent AI and chip stocks into a wobble. The Nasdaq is on course for a four per cent weekly loss, its worst in over a year."
+    },
+    {
+      "desk": "gaming",
+      "text": "[quick] That OpenAI news is resonating hard in the gaming world too. We have had a brutal week for the industry, led by the news that Xbox Game Studios head Craig Duncan has resigned, with mass layoffs expected to land once the financial year closes tomorrow."
+    },
+    {
+      "desk": "gaming",
+      "text": "Compulsion Games, the studio behind the Peabody Award-winning South of Midnight, is reportedly facing closure. That is a gut punch. And separately, EA has confirmed its third round of redundancies this year, as a £43 billion Saudi-backed buyout of the company moves toward its completion deadline this weekend."
+    },
+    {
+      "desk": "liverpool",
+      "text": "[excited] Right, enough doom and gloom, let us talk football. Liverpool have had a massive week off the pitch. Andoni Iraola is confirmed as the new head coach, personal terms are agreed with World Cup sensation Yan Diomande, and PSG's Bradley Barcola is apparently keen to join as well."
+    },
+    {
+      "desk": "world",
+      "text": "[laughs] The World Cup connection is a good one. Scotland are out, knocked out 3-0 by Brazil. But England and France both have crunch final group stage matches playing out today. France versus Norway is the headline tie, with Mbappe already on four goals in two games."
+    },
+    {
+      "desk": "worcester",
+      "text": "Scotland supporters in Worcester will be gutted. But there is some good news on the rail front. Fares are frozen this year for the first time in 30 years, saving commuters heading to Birmingham or London hundreds of pounds compared to the 5.8 per cent rise that was planned."
+    },
+    {
+      "desk": "ev",
+      "text": "[thoughtful] And there is good news on energy costs too, at least if you own an electric car. Yes, the price cap is going up 13 per cent from July, which stings. But smart overnight EV tariffs are holding at around seven pence per kilowatt hour, a remarkable gap compared to daytime rates of around 27 pence."
+    },
+    {
+      "desk": "ev",
+      "text": "If you are thinking about making the switch to electric, there is also good news this week. The home charger grant has risen to £500 and now covers renters and flat owners for the first time. And the Kia EV4 has just dropped to under £31,000 after jumping into the top grant tier."
+    },
+    {
+      "desk": "gaming",
+      "text": "[excited] On a lighter note, there is one genuinely joyful gaming story this week. Star Fox is back. After a decade away, the Switch 2 exclusive launched on Wednesday to very positive reviews. Velan Studios have done a lovely job with the Star Fox 64 remake, and critics are calling it the definitive version."
+    },
+    {
+      "desk": "world",
+      "text": "[warm] And on that happier note, that is The Wire for this morning. Stay cool out there today, wherever you are in the country. We will be back with more tomorrow."
+    }
+  ]
+}
