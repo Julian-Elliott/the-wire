@@ -881,23 +881,49 @@ function toggleListen(id){
 }
 
 // ---- daily podcast player (one shared player) ----------------------------
-let _pod=null;
+// The episode renders server-side (ElevenLabs) and caches in R2. It's usually
+// pre-warmed when the feed is built, but on a cold cache we poll readiness and
+// show progress rather than hang the <audio> element on a slow blocking request
+// (which used to leave the button stuck on "…").
+let _pod=null, _podBusy=false;
 function syncPod(){
   const b=document.getElementById("podplay"); if(!b) return;
   const playing=!!(_pod && !_pod.paused && !_pod.ended);
-  const loading=!!(_pod && !_pod.paused && _pod.readyState<3 && !_pod.ended);
+  const loading=_podBusy || !!(_pod && !_pod.paused && _pod.readyState<3 && !_pod.ended);
   b.classList.toggle("loading",loading);
   b.textContent = loading ? "…" : (playing ? "⏸" : "▶");
 }
-function podToggle(){
-  if(_pod){ _pod.paused ? _pod.play() : _pod.pause(); syncPod(); return; }
-  const sub=document.getElementById("podsub"); if(sub) sub.textContent="Generating today's episode… (a few seconds)";
+// Attach the audio element to the episode. On a warm cache it plays instantly;
+// on a cold cache the GET renders server-side (~40s) then streams it. If the GET
+// returns 503 (a concurrent render holds the lock), retry shortly — by then it's
+// cached.
+function attachPod(retries){
+  retries = (retries==null) ? 2 : retries;
+  _podBusy=false;
   _pod=new Audio("/api/podcast/today");
   ["playing","pause","ended","waiting","canplay"].forEach(ev=> _pod.addEventListener(ev, syncPod));
-  _pod.addEventListener("error", ()=>{ const s=document.getElementById("podsub"); if(s) s.textContent="Not ready yet — it's built with each refresh."; syncPod(); });
   _pod.addEventListener("playing", ()=>{ const s=document.getElementById("podsub"); if(s) s.textContent="The desks, in conversation"; });
+  _pod.addEventListener("error", ()=>{
+    _pod=null; const s=document.getElementById("podsub");
+    if(retries>0){
+      if(s) s.textContent="Generating today's episode… (up to a minute)";
+      _podBusy=true; syncPod();
+      setTimeout(()=> attachPod(retries-1), 5000);
+    } else { if(s) s.textContent="Couldn't load the episode, try again shortly."; syncPod(); }
+  });
   _pod.play().catch(()=> syncPod());
   syncPod();
+}
+const podMeta=()=> fetch("/api/podcast/today?meta=1").then(r=>r.json()).catch(()=>null);
+async function podToggle(){
+  if(_pod){ _pod.paused ? _pod.play() : _pod.pause(); syncPod(); return; }
+  if(_podBusy) return;
+  const sub=document.getElementById("podsub");
+  _podBusy=true; syncPod();
+  const m=await podMeta();
+  if(!m || !m.turns){ if(sub) sub.textContent="Built with the next refresh."; _podBusy=false; syncPod(); return; }
+  if(!m.ready && sub) sub.textContent="Generating today's episode… (up to a minute)";
+  attachPod();   // warm → plays at once; cold → the GET renders, then plays
 }
 
 // ---- event wiring (incl. swipe gestures) ---------------------------------
@@ -947,10 +973,12 @@ function wire(){
   const pp=document.getElementById("podplay");
   if(pp){
     pp.onclick=podToggle; syncPod();
-    if(!_pod) fetch("/api/podcast/today?meta=1").then(r=>r.json()).then(m=>{
-      const s=document.getElementById("podsub"); if(!s||_pod) return;
-      s.textContent = (m&&m.ready) ? "Ready · the desks in conversation" : (m&&m.turns ? "Tap play to generate today's episode" : "Built with the next refresh");
-    }).catch(()=>{});
+    // Readiness check on load (status only; the render is warmed on ingest and,
+    // failing that, by the audio GET when someone taps play).
+    if(!_pod && !_podBusy) podMeta().then(m=>{
+      const s=document.getElementById("podsub"); if(!s||_pod||_podBusy) return;
+      s.textContent = (m&&m.ready) ? "Ready · the desks in conversation" : (m&&m.turns ? "Tap play to listen" : "Built with the next refresh");
+    });
   }
   document.querySelectorAll("[data-restore]").forEach(b=> b.onclick = ()=> restoreType(b.dataset.restore));
 
