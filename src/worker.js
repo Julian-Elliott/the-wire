@@ -152,7 +152,7 @@ function prefHint(profile, desk) {
 // the research prompt so the model spends its web searches on genuinely NEW
 // stories instead of re-finding what the reader has already seen.
 const avoidBlock = list => (Array.isArray(list) && list.length)
-  ? `\nAlready covered in the last few days, do NOT repeat these stories or their angle, find genuinely NEW developments (better to return fewer items than to rehash):\n- ${list.slice(0, 12).map(t => String(t).replace(/[\r\n]+/g, " ").slice(0, 140)).join("\n- ")}`
+  ? `\nAlready covered in the last few days. Treat each as an ONGOING STORY, not one headline: the next instalment of a saga (a new fee, a new club in the race, terms agreed, an appointment settling in) is STILL already covered even if the wording or number differs. Do NOT re-run these or re-angle them. Only resurface one if something genuinely NEW and CONFIRMED has happened (a deal officially done, a result, a reversal), and then lead with exactly what changed. Otherwise find genuinely NEW stories, returning fewer items rather than rehashing:\n- ${list.slice(0, AVOID_PER_DESK).map(t => String(t).replace(/[\r\n]+/g, " ").slice(0, 140)).join("\n- ")}`
   : "";
 
 function buildPrompt(desk, hint, avoid) {
@@ -366,7 +366,7 @@ const seenDedupOn = env => String((env && env.SEEN_DEDUP) || "on").toLowerCase()
 const SEEN_WINDOW_DAYS = env => { const n = Number(env && env.SEEN_WINDOW_DAYS); return isFinite(n) && n > 0 ? n : 6; };
 const SEEN_MAX = 240;            // total stories remembered per feed (bounds KV value size)
 const SEEN_MAX_PER_DESK = 40;    // ...and per desk
-const AVOID_PER_DESK = 12;       // recent headlines handed back to the researcher
+const AVOID_PER_DESK = 30;       // recent headlines handed back to the researcher (cover the saga tail, not just the newest few)
 // Desks whose card TITLES legitimately repeat day to day (e.g. Markets' "FTSE
 // 100"): for these, cross-day matching is by URL only, never title, so the desk
 // still refreshes daily. (Same-day title-collapse in mergeItems is unaffected.)
@@ -389,6 +389,32 @@ function canonUrl(u) {
 }
 const urlKey = it => { const c = canonUrl(it && it.url); return c ? "u:" + c : null; };
 const titleKey = it => "t:" + (it && it.category) + "|" + normTitle(it && it.title);
+
+// ---- recency gate --------------------------------------------------------
+// Reject genuinely STALE stories (e.g. a March story surfacing in late June) that
+// no seen-key can catch because they were never served before. We only ever drop
+// when a date is CONFIDENTLY known AND clearly older than a generous per-desk
+// max-age, so a legitimately recent or undateable story is never dropped.
+const _MON = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
+function urlDateSec(u) {
+  const s = String(u || "");
+  let m = s.match(/\/(20\d\d)[\/\-](0[1-9]|1[0-2])(?:[\/\-](0[1-9]|[12]\d|3[01]))?/);
+  if (m) { const t = Date.UTC(+m[1], +m[2] - 1, m[3] ? +m[3] : 15) / 1000; return isFinite(t) ? t : null; }
+  m = s.match(/\/(20\d\d)\/(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\/([0-3]?\d)/i);
+  if (m) { const t = Date.UTC(+m[1], _MON[m[2].toLowerCase()] - 1, +m[3]) / 1000; return isFinite(t) ? t : null; }
+  return null;
+}
+const pubDateSec = v => { if (!v) return null; const t = Date.parse(String(v)); return isFinite(t) ? Math.floor(t / 1000) : null; };
+// Generous, WIDER than the editorial window prose, so we only drop the egregiously stale.
+const DESK_MAX_AGE_DAYS = { liverpool: 7, markets: 7, world: 7, worcester: 21, gaming: 21, ev: 30 };
+const DEFAULT_MAX_AGE_DAYS = 30;
+const recencyOn = env => String((env && env.RECENCY_GATE) || "on").toLowerCase() !== "off";
+function isStale(it, nowSec) {
+  const maxAge = (DESK_MAX_AGE_DAYS[it && it.category] || DEFAULT_MAX_AGE_DAYS) * 86400;
+  const dated = pubDateSec(it && it.publishedAt) ?? urlDateSec(it && it.url);
+  return dated != null && dated < (nowSec - maxAge);   // drop ONLY when a date is known AND clearly old
+}
+const dropStale = (env, fresh, nowSec) => recencyOn(env) ? fresh.filter(it => !isStale(it, nowSec)) : fresh;
 // The keys an item is matched/recorded under for CROSS-DAY dedup: always its URL
 // (when present), plus its title unless the desk's titles legitimately recur.
 function crossDayKeys(it) {
@@ -544,7 +570,7 @@ async function buildBriefing(env, profile, writeKeys) {
   const stamp = new Date().toISOString();
   const slot = londonSlot();
   // Drop anything already served on this feed in the last few days, then stamp.
-  const fresh = dropSeen(interleave(byCat, order), seen.keys);
+  const fresh = dropSeen(dropStale(env, interleave(byCat, order), nowSec), seen.keys);
   fresh.forEach(it => { it.addedAt = stamp; it.slot = slot; });
 
   // Merge into today's running feed so afternoon/evening pulls ADD to the
@@ -711,10 +737,10 @@ async function avoidListBlock(env, latest, who) {
     const byDesk = seen.avoidByDesk || {};
     const safe = s => String(s == null ? "" : s).replace(/[\r\n"]+/g, " ").trim().slice(0, 200);
     const al = Object.keys(byDesk)
-      .map(c => { const ts = (byDesk[c] || []).slice(0, 12); return ts.length ? `  ${safe(c)}: ${ts.map(t => `"${safe(t)}"`).join("; ")}` : null; })
+      .map(c => { const ts = (byDesk[c] || []); return ts.length ? `  ${safe(c)}: ${ts.map(t => `"${safe(t)}"`).join("; ")}` : null; })
       .filter(Boolean);
     if (!al.length) return "";
-    return `ALREADY COVERED ${who} in the last few days. Do NOT report these again, and do NOT merely reword the same story under a new headline (the same development, re-titled, still counts as already covered). Find genuinely NEW developments for each desk, and return fewer items, even none, rather than rehashing:\n${al.join("\n")}`;
+    return `ALREADY COVERED ${who} in the last few days, grouped by desk. Treat each line as an ONGOING STORY we have already run, not just one headline. Do NOT report any of these again, and do NOT re-run the same story under a new angle, headline, fee, or source: the next instalment of a transfer saga, a manager appointment, or a takeover already listed here is STILL already covered, even if the wording or the number is different. Only resurface one of these if there is a genuinely NEW, CONFIRMED, material development (a deal officially completed, a result, a reversal), and if so, lead with exactly what changed. Otherwise find genuinely new stories, and return fewer items, even none for a desk, rather than rehashing:\n${al.join("\n")}`;
   } catch (_) { return ""; }
 }
 
@@ -908,6 +934,7 @@ function normalizeIngest(items) {
       contentType: x.contentType ? String(x.contentType).slice(0, 40) : "News",
       source: x.source ? String(x.source).slice(0, 120) : "",
       url: x.url ? String(x.url).slice(0, 600) : "",
+      publishedAt: x.publishedAt ? String(x.publishedAt).slice(0, 40) : (x.pubDate ? String(x.pubDate).slice(0, 40) : (x.published ? String(x.published).slice(0, 40) : null)),
       direction: x.direction || null,
       changePct: x.changePct || null,
     }))
@@ -956,7 +983,9 @@ async function ingestBriefing(env, payload, target) {
   // Drop stories already served on this feed in the last few days. The routine
   // should have skipped them via /api/recent; this is the server-side backstop.
   const seen = await loadSeen(env, writeKeys.latest, nowSec);
-  const freshUnseen = dropSeen(fresh, seen.keys);
+  const freshRecent = dropStale(env, fresh, nowSec);
+  const staleDropped = fresh.length - freshRecent.length;
+  const freshUnseen = dropSeen(freshRecent, seen.keys);
 
   let prior = [];
   const existing = await readJSON(env, writeKeys.latest);
@@ -979,7 +1008,7 @@ async function ingestBriefing(env, payload, target) {
   // keep any prior one if this payload doesn't carry a fresh script.
   const podcast = sanitizePodcast(payload && payload.podcast) || (existing && existing.podcast) || null;
 
-  const out = { date: londonDate(), generatedAt: stamp, slot, items, fixture, report, desks, podcast, source: "routine" };
+  const out = { date: londonDate(), generatedAt: stamp, slot, items, fixture, report, desks, podcast, staleDropped, source: "routine" };
   if (env.WIRE_KV) {
     // The shared feed lives forever; a per-user feed expires if its owner goes
     // quiet (refreshed on every rebuild while they're active), so churned/abusive
@@ -1456,9 +1485,7 @@ export default {
         await startBuild(env, "shared", null, { latest: SHARED_KEY, snapshot: `briefing:${londonDate()}` });
       }
       // then each known personalised user — metered builds only. When the routine
-      // owns generation we SKIP these (personalised is built on-demand by the
-      // routine; firing one routine run per user per cron would blow the daily
-      // cap, and a metered build just churns the possibly-dead API).
+      // owns generation we use the routine instead (see the routine branch below).
       if (!useRoutine && env.WIRE_KV) {
         try {
           const list = await env.WIRE_KV.list({ prefix: "profile:" });
@@ -1467,6 +1494,32 @@ export default {
             const profile = await readJSON(env, profileKey(u));
             if (!isCustomised(profile)) continue;
             await startBuild(env, `u:${u}`, profile, { latest: userBriefKey(u), snapshot: `${userBriefKey(u)}:${londonDate()}` });
+          }
+        } catch (_) {}
+      }
+      // Routine mode: refresh each ACTIVE personalised user via the routine on
+      // every cron run, so personalised feeds (and their podcast) refresh 3x/day
+      // like the shared feed. Only users active within ACTIVE_TTL (signed in and
+      // around lately) to bound the routine's daily run cap; capped per run as a
+      // backstop. No globalKey here: the cron is the controlled scheduler and the
+      // per-user rateKey prevents double-firing, whereas a global key would starve
+      // every user but the first in a single run.
+      if (useRoutine && routineFireConfigured(env) && env.WIRE_KV) {
+        try {
+          const list = await env.WIRE_KV.list({ prefix: "profile:" });
+          const MAX_PERSONALISED_PER_CRON = Number(env.MAX_PERSONALISED_PER_CRON || 8);
+          let fired = 0;
+          for (const k of list.keys) {
+            if (fired >= MAX_PERSONALISED_PER_CRON) break;
+            const u = k.name.slice("profile:".length);
+            const profile = await readJSON(env, profileKey(u));
+            if (!isCustomised(profile)) continue;
+            if (!(await env.WIRE_KV.get(activeKey(u)))) continue;   // skip dormant users
+            await fireRoutine(env, {
+              text: await personalisedFireText(env, u, profile),
+              rateKey: `routine:last_fire:u:${u}`,
+            });
+            fired++;
           }
         } catch (_) {}
       }

@@ -811,7 +811,7 @@ function render(){
     <nav class="filters"><div class="filters-inner">${filterBtns}</div></nav>
     <section class="podcast" id="podbar">
       <button class="pod-play" id="podplay" type="button" aria-label="Play today's podcast">▶</button>
-      <div class="pod-meta"><div class="pod-title">Today's briefing podcast</div><div class="pod-sub" id="podsub">The desks, in conversation</div></div>
+      <div class="pod-meta"><div class="pod-title">The latest on The Wire</div><div class="pod-sub" id="podsub">The day's news, talked through</div></div>
     </section>
     ${(()=>{ let seen=true; try{ seen=!!localStorage.getItem("jackwire:readertip"); }catch(_){}; return seen?"":`<div class="rtip" id="rtip"><div>Tip: tap a headline to open the story in Safari, then tap <b>aA</b> in the address bar and choose <b>Use Reader Automatically</b>. Safari will open that site's articles in Reader from then on.</div><button class="rtip-x" id="rtip-x" aria-label="Dismiss">✕</button></div>`; })()}
     <main class="feed">${onboardHtml}${feedHtml}</main>
@@ -902,7 +902,7 @@ function attachPod(retries){
   _podBusy=false;
   _pod=new Audio("/api/podcast/today");
   ["playing","pause","ended","waiting","canplay"].forEach(ev=> _pod.addEventListener(ev, syncPod));
-  _pod.addEventListener("playing", ()=>{ const s=document.getElementById("podsub"); if(s) s.textContent="The desks, in conversation"; });
+  _pod.addEventListener("playing", ()=>{ const s=document.getElementById("podsub"); if(s) s.textContent="The day's news, talked through"; });
   _pod.addEventListener("error", ()=>{
     _pod=null; const s=document.getElementById("podsub");
     if(retries>0){
@@ -977,7 +977,7 @@ function wire(){
     // failing that, by the audio GET when someone taps play).
     if(!_pod && !_podBusy) podMeta().then(m=>{
       const s=document.getElementById("podsub"); if(!s||_pod||_podBusy) return;
-      s.textContent = (m&&m.ready) ? "Ready · the desks in conversation" : (m&&m.turns ? "Tap play to listen" : "Built with the next refresh");
+      s.textContent = (m&&m.ready) ? "Ready · the day's news, talked through" : (m&&m.turns ? "Tap play to listen" : "Built with the next refresh");
     });
   }
   document.querySelectorAll("[data-restore]").forEach(b=> b.onclick = ()=> restoreType(b.dataset.restore));

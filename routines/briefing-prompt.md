@@ -39,9 +39,17 @@ curl -sS "$RECENT_URL" -H "x-ingest-key: $INGEST_SECRET"
 It returns `{ "desks": { "<category>": ["already-covered headline", ...] } }`
 (Markets is intentionally omitted, its titles recur daily). **For each desk, do
 NOT re-report those stories or just reword them, find genuinely NEW developments.**
-If a desk has nothing genuinely new, return fewer items (or none) for it rather
-than rehashing, the site drops same-story repeats anyway. If `/api/recent` errors
-(e.g. 404 not configured), just proceed normally.
+
+Treat each already-covered line as an ONGOING STORY, not a single headline. A
+transfer saga, a manager appointment, a takeover, or any rolling story keeps
+generating new headlines (a new fee, a new club entering the race, personal terms
+agreed, an agent quote). If a story you find is the next instalment of one already
+listed, it is ALREADY COVERED, even with a different headline, figure, or source.
+Re-run it ONLY when something genuinely new and CONFIRMED has happened (a deal
+officially done, a result, a reversal), and then lead with exactly what changed.
+If the only update is a re-angle of a story already covered, drop it and return
+fewer items for that desk. If `/api/recent` errors (e.g. 404 not configured), just
+proceed normally.
 
 ## 1. Research each desk (shared build)
 
@@ -65,6 +73,7 @@ Rules for every item:
   the sentence.** This applies to every field, including `summary`, `why`,
   `readout`, and the `podcast` script.
 - Always include a real `source` (publication) and `url` (link to the story).
+- Include `publishedAt`: the story's own publish date (ISO `2026-06-28`, or `2026-06` if that's all you have). Do NOT surface stories older than the desk window below; a story from weeks or months ago is not news, drop it even if your search turns it up. If you cannot establish a recent date, prefer a clearly-dated alternative.
 
 The desks (use the `category` id exactly as given):
 
@@ -89,8 +98,8 @@ personalised `podcast` for that reader (see the `podcast` section below).
 {
   "fixture": "Liverpool vs Arsenal, Sat, 17:30",
   "items": [
-    { "category": "liverpool", "title": "...", "summary": "<=24 words", "why": "why a fan cares", "readout": "3-6 spoken sentences", "contentType": "News", "source": "BBC Sport", "url": "https://..." },
-    { "category": "markets", "title": "FTSE 100", "direction": "down", "changePct": "-0.6%", "summary": "...", "why": "the real reason it moved", "readout": "...", "contentType": "Index move", "source": "Reuters", "url": "https://..." }
+    { "category": "liverpool", "title": "...", "summary": "<=24 words", "why": "why a fan cares", "readout": "3-6 spoken sentences", "contentType": "News", "source": "BBC Sport", "url": "https://...", "publishedAt": "2026-06-28" },
+    { "category": "markets", "title": "FTSE 100", "direction": "down", "changePct": "-0.6%", "summary": "...", "why": "the real reason it moved", "readout": "...", "contentType": "Index move", "source": "Reuters", "url": "https://...", "publishedAt": "2026-06-28" }
   ],
   "podcast": [
     { "desk": "host",    "text": "[wry] If you only remember one number this morning, make it four hundred pounds. This is The Wire." },
@@ -106,72 +115,101 @@ personalised `podcast` for that reader (see the `podcast` section below).
 ### The `podcast` field
 
 A short, fully-produced **audio show of the day**, roughly 2 to 4 minutes, built for **every** run. It is an array of turns:
-`{ "desk": "<category id or 'host'>", "text": "<exactly the words spoken aloud>" }`. The `desk` id selects the voice. Use the special id **`host`** for the anchor (a dedicated anchor voice). Use each desk's `category` id (`world`, `markets`, `liverpool`, `gaming`, `ev`, `worcester`, or a custom desk's id on a personalised build) when that correspondent speaks.
+`{ "desk": "<category id or 'host'>", "text": "<exactly the words spoken aloud>" }`. The `desk` id selects the voice. The special id **`host`** is the **narrator** (a dedicated narrator voice). Every other id is a desk `category` (`world`, `markets`, `liverpool`, `gaming`, `ev`, `worcester`, or a custom desk's id on a personalised build) and is one of the **desk characters**.
 
 This field is built on **both** runs:
-- **Shared build:** the six built-in desks plus the `host` anchor.
-- **Personalised build:** the same kind of show using ONLY this reader's desks plus the `host` anchor, ordered by what matters most to THIS reader today. See "Personalised build" at the end of this section.
+- **Shared build:** the desk characters for the desks you have real news for, plus the `host` narrator.
+- **Personalised build:** the same kind of show using ONLY this reader's desks plus the `host` narrator, ordered by what matters most to THIS reader today. See "Personalised build" at the end of this section.
 
-Think drive-time magazine show, not a panel and not a string of monologues. There is **one anchor** who MCs the whole thing: a seasoned broadcast presenter with MBE-style guile, urbane, warm, quietly authoritative, a glint of wit, a master facilitator who tees each desk up to shine, asks the question the listener is actually thinking, pushes back gently, draws out the so-what, threads the stories together, and never lets it drag. The desk correspondents are the experts the anchor brings in; they bring the colour and the detail in their own voice.
+#### What this show is (read this first)
 
-**The anchor is `host`. Use it generously.** The `host` turn drives the show; the desks answer.
+Stop thinking "news bulletin". Think **a podcast you'd actually choose to listen to**: a few clever, funny, slightly eccentric friends chatting about today's news on a popular radio show, while a dry, omniscient narrator drops in to tell you the bit you should probably know. You are **overhearing the banter**, not being read the news.
+
+Two distinct registers, and they must sound different:
+
+- **The narrator is the `host` voice.** It is a Hitchhiker's-Guide-style narrator: omniscient, unflappable, dryly and absurdly funny, fond of the odd tangent, but it **ALWAYS lands the essential fact**. Its signature move is the **"you should probably know"** interjection: deadpan, it drops in the single piece of context a listener actually needs. The narrator opens the show, steps in a handful of times to keep you grounded and to supply the load-bearing fact, gently punctures speculation, and closes the show. **Emulate the register only. Never quote, name, or impersonate Douglas Adams, any real person, or any real work.**
+
+- **The desk characters do Radio 1 style discussion.** Lively, contemporary, irreverent, quick, warm, genuinely funny. They **banter and react to each other like mates on air**, not like correspondents filing reports. They interrupt-and-build, they tease, they have opinions, they go "no, wait, hang on", they make each other laugh. They are clever and human. They are NOT reading bulletins, and they almost never say "and now over to".
+
+**Author-facing persona shorthand (never spoken, just to keep the voices distinct):**
+- `world` = **The Advocate** (INFJ): measured, principled, human stakes; the one who sobers the room when a story is serious.
+- `markets` = **The Architect** (INTJ): cool, systems-minded, cause and effect and probabilities, but as banter, not a lecture.
+- `liverpool` = **The Campaigner** (ENFP): warm, breathless, honest about confirmed versus rumour, works the next fixture in naturally.
+- `gaming` = **The Debater** (ENTP): quick, dry, irreverent, sharp reframes; the wind-up merchant.
+- `ev` = **The Showman** (ESTP): bombastic, very funny petrolhead in plain English and real pounds (Clarkson register, never impersonating a real person).
+- `worcester` = **The Consul** (ESFJ): warm, neighbourly, practical, brings it back to actual daily life.
+
+**This is banter-led. The characters carry most of the turns; the narrator is the lighter touch that keeps you oriented.** Aim for roughly **two thirds character chat to one third narrator**. The narrator is a welcome, funny relief valve, **never the MC of a panel.**
 
 #### The one mandated through-line (the spine)
 
-Pick the single thread that best connects the day's stories and **name it in the cold open, then return to it by name in the sign-off**, so the episode has a spine, not a list. Example: cost of living, "from the Bank of England to a Worcester bus route", closing on "the price of money, and the price of getting home". If no single thread genuinely connects the day, choose the strongest story as the spine and still call back to it at the close. One named connective thread, end to end.
+Pick the single thread that best connects the day's stories. The **narrator names it in the cold open and returns to it by name in the sign-off**, so the episode has a spine, not a list. Example: cost of living, "the running theme today is the price of things", closing on "the price of money, and the price of getting home". If no single thread genuinely connects the day, take the strongest story as the spine and still call back to it at the close. One named thread, end to end.
+
+**Plant a concrete anchor early, pay it off at the close.** The cold open should plant one vivid anchor, ideally a single number (the four hundred pounds in the sample). The sign-off must cash it in explicitly ("and yes, the four hundred pounds, I did promise we would get there"). Promise it early, land it at the end.
 
 #### Structure (follow this shape, ~18 to 28 turns)
 
-1. **Cold-open hook (host, 1 to 2 turns).** Start in motion with **one vivid, concrete anchor** the listener will remember, ideally one number ("If you only remember one number from this morning, make it four hundred pounds. We'll get to why."), and name the through-line. Then land the show ident in one breath. Do NOT start with "Good morning and welcome to a roundup of today's news." Hook first, then name the show.
-2. **Headline tease (host, 1 turn).** A quick "coming up" that trails two or three of the day's strongest stories, one teasing one-liner each, so the listener knows why to stay. Punchy; full sentences not required.
-3. **Desk segments (the body, most of the turns).** Run each desk you have real news for as its own mini-segment. For each: the host hands over by name with a sharp set-up line, the correspondent delivers the news **in character** (Markets cool and systems-minded, cause and effect, probabilities, no hype; Liverpool warm and breathless but honest about confirmed versus rumour, and working in the next fixture naturally if there is one; World measured and principled, human stakes and the longer arc; Gaming quick, dry, irreverent, sharp reframes; EV the bombastic, very funny petrolhead who explains it in plain English and real pounds, Clarkson register, never impersonating a real person; Worcester warm, neighbourly, practical, what it means for daily life). Then **genuine back-and-forth**: the host asks a real follow-up (the obvious listener question, or "so what does that mean for me"), the desk answers, and where natural a second desk chips in across the table. Lead with the biggest story and give it room; keep lighter items tight.
-4. **"What to watch" (host + one or two desks, 1 to 3 turns).** Near the end the host pivots to the look-ahead: the one thing on each key desk worth watching next (a fixture, a data print, a release date, a council vote). Fast, forward-leaning.
-5. **Sign-off (host, 1 turn).** A warm, branded close with a glint of personality that names the through-line again and ends on a clean, memorable show ident. It must sound like the same anchor who opened ("And that's your day... this has been The Wire.").
+1. **Cold open: narrator hook (host, 1 to 2 turns).** Start in motion with **one vivid, concrete anchor** the listener will remember, ideally one number, delivered in the narrator's dry, Guide-ish register, and name the through-line. Land the show ident in one breath. **Do NOT open with "Good morning and welcome to a roundup of the news."** Hook first, then name the show. Then hand into the chatter ("The desks, predictably, are already arguing about it.").
+2. **The desks pile in (the body, most of the turns).** This is the heart of it: the desk characters **talk to each other about the day's stories as a conversation**, not a sequence of solo reports. A character kicks off a story with a reaction or a hot take, another jumps in to agree, push back, or take the mick, a third lands the human or money angle. Real back-and-forth, real interruptions-and-builds. Move through the stories you have news for, biggest first, but let it flow like a chat. Every story still earns **one vivid concrete detail** (a number, a name, a place, a score, a date) said out loud.
+3. **Narrator "you should probably know" interjections (host, woven through, ~3 to 5 across the show).** When the chat needs grounding, the narrator drops in, deadpan, with the fact the listener actually needs: who said it, the real number, the context the characters skated over, what it actually means. Absurd or tangential in framing, but the payload is always a true, useful fact. Then it hands straight back to the banter. **Vary the reframe so it never sounds like a tic;** reach for: "You should probably know that...", "The thing worth knowing here is...", "For the record, and the record is rarely wrong about this...", "A detail that will matter by Friday:".
+4. **"What to watch" (mixed, 1 to 3 turns).** Near the end, the look-ahead: the one thing worth watching next on a key desk or two (a fixture, a data print, a release date, a council vote). A quick character line or two with the narrator topping and tailing. Fast, forward-leaning.
+5. **Sign-off: narrator close (host, 1 turn).** A warm, dryly funny, branded close that names the through-line again, cashes in the cold-open anchor, and ends on a clean show ident, in the same narrator voice that opened ("That has been The Wire. Mind how you go.").
 
-#### How to make it sound produced, not flat
+#### How to make it sound like banter, not a bulletin
 
-- **The host links everything (iron rule).** Never jump from one desk to another without an anchor line between them, and the link must **do work**: a tease, a contrast, a callback, or the listener's own question ("From a winning weekend at Anfield to rather harder numbers, the markets desk.").
-- **Every featured desk is talked TO, not just talked AT.** At least one host-to-desk question-then-answer per desk that appears. A follow-up must be a genuine question a smart listener would ask, and the desk must actually answer it.
-- **One vivid, concrete detail per story** the listener remembers: a spoken figure, a name, a place, a score, a date. This is the main anti-blandness lever.
-- **Cross-talk, sparingly but for real.** Engineer at least a couple of true cross-desk moments where stories connect: e.g. Markets reacting to the EV desk's number on energy prices, World sobering a lighter moment, Gaming teasing Markets, World and Worcester on a national story with local bite. One desk may gently disagree ("I'd push back on that"). Keep it short and natural.
-- **Host signposting bank (vocabulary to reach for):** "stay with that thought", "back to you", "quick one for you", "two more before we look at the week ahead", "before we go". Keep the listener always knowing where they are.
-- **Host guile.** The anchor tees the desk up to shine, never steals the story, punctures waffle gently, keeps it human, and knows when to move on. The signature accuracy pushback is **"careful, is that confirmed, or is that the rumour?"** Use it when a desk strays toward speculation.
-- **The blunt edit.** If a turn could be cut without losing anything, cut it.
+- **The narrator's iron rule (the one checkable guardrail).** The narrator only steps in **between desks when it does work**: a tease, a contrast, a callback, a puncture, or a "you should probably know". Otherwise, let the desks hand straight to each other, desk to desk, no narrator line needed. Keep the two thirds character to one third narrator ratio as the hard target.
+- **Characters react to each other by content.** They answer the actual thing the last person said: agree, build, tease, or disagree ("see, I'd push back on that", "no, hang on", "right, but here's the bit that gets me"). Engineer at least **three genuine cross-talk moments** where two or three desks bounce off the same story or connect two stories (Markets reacting to the EV desk's pounds figure, World sobering a lighter moment, Gaming winding up Markets, Worcester landing the local bite on a national story).
+- **One vivid, concrete detail per story**, spoken aloud. This is the main anti-blandness lever: a figure, a name, a place, a score, a date.
+- **Keep it quick.** Turns are short and the rhythm is fast. A character can speak two turns in a row if they're on a roll, but prefer trading back and forth.
+- **Cap the cleverness.** At most **one metaphor or absurd image per host turn.** A single "small, anxious cloud" lands; two or three stacked metaphors read as try-hard. Land the joke, land the fact, move on.
+- **The blunt edit.** Funny is not the same as long. If a turn could be cut without losing anything, cut it.
+
+#### Accuracy and tone (non-negotiable, every turn)
+
+- **The fun lives in VOICE, FRAMING and BANTER. The FACTS stay rigorous.** Say only what the desk research supports. Attribute naturally in speech ("the BBC is reporting", "according to the Bank of England"). Separate confirmed fact from speculation. Never invent quotes, numbers, or events. Never hype beyond the facts. The narrator's absurd asides and the characters' jokes must never distort what actually happened: the comedy is in how it's said, never in the facts.
+- **Flag rumour as rumour, in character AND in plain words.** Keep the in-character filing images, varied ("a rumour wearing the coat of a fact", "filed under 'widely repeated, not yet true'", "a number people very much want to be true"), but **every unconfirmed claim must also carry a plain, literal flag** the audio can be audited on, such as "still unconfirmed", "that part is rumour", or "do not quote me on the number". The charming image alone is not enough; the plain flag must be there too.
+- **The narrator's accuracy puncture, phrased as a question, and the character owns it.** When a character drifts into speculation, the narrator (or another character) calls it in the Guide register, as a question to the desk: "which is it, confirmed, or the bit you are hoping for?". The character then **owns the correction on air** ("Honestly, both, and I hate that you asked... so do not quote me on the number"). This models the correspondent self-correcting, which is the behaviour we want. A reusable deadpan also works: "You should probably know that 'everyone is saying' is not, technically, a source."
+- **NEVER do comedy on tragedy, death, or human suffering.** On any serious or sombre story the narrator and the characters **drop the jokes entirely** and play it straight, plainly and humanely. On a sombre story **the narrator takes no tangent at all**, not even an absurd aside that lands on a true fact, because trivialising a death toll with a clever frame is still trivialising it; just the plain humane fact. The World desk (The Advocate) leads these; the others fall quiet and serious. Use `[serious]` to set the register, and let the next light story re-lift the room naturally. The through-line and the show still hold; the comedy simply stops for that story.
 
 #### Hard rules (non-negotiable, every turn)
 
 - **Speakable British English only.** No markdown, no URLs, no headings, no stage directions other than the audio tags below. Spell out figures the way a presenter says them ("three hundred pounds", "down two thirds of a percent", "half past five").
 - **House style: never use em dashes or en dashes.** They read as long pauses and sound AI. Use commas or split the sentence. Every turn.
-- **Audio tags, sparingly, only at the START of a turn**, to set delivery: `[warm]`, `[excited]`, `[measured]`, `[laughs]`, `[thoughtful]`, `[wry]`, `[serious]`. Not mid-sentence, not on most turns, never overused. Pick the one that fits the moment.
-- **Each turn is 1 to 3 sentences. Keep turns under about 700 characters** (longer text is truncated at render). The whole episode is roughly 18 to 28 turns and 2 to 4 minutes, with genuine back-and-forth, not a string of monologues.
-- **Accuracy is non-negotiable.** Say only what the desk research supports. Attribute naturally in speech ("the BBC is reporting", "according to the Bank of England"). Separate confirmed fact from analysis or speculation, and flag rumour as rumour ("still just a rumour, but"). Never invent quotes, numbers, or events. Never hype beyond the facts. Light humour is welcome, but never on tragedy or human suffering; the host steers those segments with care.
-- **Only feature desks you actually have news for.** If a desk has nothing worth a segment today, leave it out rather than padding. Order segments by what matters most today, not by the desk-table order.
+- **Audio tags, sparingly, only at the START of a turn**, to set delivery. Use only: `[warm]`, `[excited]`, `[measured]`, `[laughs]`, `[thoughtful]`, `[wry]`, `[deadpan]`, `[amused]`, and `[serious]` for sombre stories. Not mid-sentence, not on most turns, never overused. `[deadpan]` and `[wry]` suit the narrator; the characters reach for `[laughs]`, `[excited]`, `[amused]`, `[warm]`.
+- **Turn shape `{ "desk": "<category id or 'host'>", "text": "..." }`.** `"host"` is the narrator voice; every other id must be a desk `category` that appears in this run. Each turn is **1 to 3 sentences and under about 700 characters** (longer text is truncated at render).
+- **Whole show ~18 to 28 turns, ~2 to 4 minutes**, real back-and-forth, not a string of monologues.
+- **Only feature desks you actually have news for.** If a desk has nothing worth a turn today, leave it out rather than padding. Order by what matters most today, not by the desk-table order.
 
 #### Personalised build
 
-On a personalised build, build the same produced drive-time show, but using ONLY this reader's desks (which may include custom desks, each with its own auto-assigned voice) plus the `host` anchor, and order the segments by what matters most to THIS reader today. Where the reader's name is available, the host may greet them by name **once**, warmly and sparingly, near the cold-open or sign-off, never repeatedly. Every hard rule above still applies. **If the reader has only one desk, the host still MCs it as a real two-way segment** with a hook, a host-to-desk follow-up, a "what to watch", and a branded sign-off, never a single flat monologue. Include the `podcast` array in the POSTed JSON body alongside `items` and `userId` (see the personalised-build fire-text).
+On a personalised build, make the same show, but using ONLY this reader's desks (which may include custom desks, each with its own auto-assigned voice) plus the `host` narrator, ordered by what matters most to THIS reader today. A custom desk has no fixed persona, so give it a clear, consistent character in keeping with its topic, and let it banter like the rest. Where the reader's name is available, the narrator may greet them by name **once**, warmly and sparingly, near the cold open or sign-off, never repeatedly. Every rule above still applies. **If the reader has only one desk, you still need banter:** stage it as the narrator and that one character genuinely talking to each other, the narrator playing curious foil and dropping its "you should probably know" facts, never one flat monologue. Include the `podcast` array in the POSTed JSON body alongside `items` and `userId` (see the personalised-build fire-text).
 
-#### Shape
+#### Shape (worked sample, note the narrator's "you should probably know", the character banter, the desk owning its own rumour correction, and the tragedy rule where the jokes stop and the World desk leads)
 
 ```json
 "podcast": [
-  { "desk": "host",      "text": "[wry] If you only remember one number this morning, make it four hundred pounds. We'll get to why. This is The Wire, and the thread today is the cost of living." },
-  { "desk": "host",      "text": "Coming up, the pound moves before the Bank of England, Liverpool get a boost before the weekend, and the games desk has opinions about a price tag. Markets, start us off." },
-  { "desk": "markets",   "text": "[measured] Morning. The pound is up about half a percent against the dollar, and according to Reuters it's all riding on the Bank of England later." },
-  { "desk": "host",      "text": "Half a percent before they've even spoken. So is the market now betting the next move is a cut?" },
-  { "desk": "markets",   "text": "It is, and that's the real story. Traders have quietly priced in a cut by autumn, so today is about whether the Bank pushes back." },
-  { "desk": "host",      "text": "Hold that thought, it ties straight to your patch. EV desk, four hundred pounds, go." },
-  { "desk": "ev",        "text": "[excited] A decent home battery has dropped to around four thousand pounds installed, and for a typical house that's roughly four hundred pounds a year off your bill. That's not nothing, that's a holiday." },
-  { "desk": "markets",   "text": "[wry] And if rates do fall, the finance on it gets cheaper too, so the maths only improves." },
-  { "desk": "host",      "text": "[laughs] Two desks agreeing, mark the date. Liverpool, I'm told there's a twist at Anfield. Careful now, is that confirmed, or is that the rumour?" },
-  { "desk": "liverpool", "text": "[excited] Half and half. The BBC is reporting the new signing passed his medical, that bit's confirmed. The fee is still very much rumour, so don't quote me on the number." },
-  { "desk": "host",      "text": "Glad you flagged it. Before we go, the week ahead, one line each. Liverpool?" },
-  { "desk": "liverpool", "text": "[warm] Arsenal at home, Saturday, half past five. Top of the table on the line, and honestly I've not slept." },
-  { "desk": "host",      "text": "[warm] The price of money, and the price of a fully charged life. That's your day, and yes, four hundred pounds, I told you we'd get there. This has been The Wire." }
+  { "desk": "host",      "text": "[deadpan] There is a number floating over this morning like a small, anxious cloud, and the number is four hundred pounds. This is The Wire, and the running theme today is the price of things. The desks are, predictably, already arguing about it." },
+  { "desk": "markets",   "text": "[measured] Right, my number first, because it sets up everyone else's. The pound is up about half a percent against the dollar, and it is all riding on the Bank of England this afternoon." },
+  { "desk": "gaming",    "text": "[amused] Half a percent before they've even opened their mouths. Imagine being that powerful and still wearing a lanyard." },
+  { "desk": "markets",   "text": "[wry] Mock all you like, but traders have quietly priced in a rate cut by autumn. So today is really about whether the Bank pushes back or lets them dream." },
+  { "desk": "host",      "text": "[deadpan] You should probably know what a rate cut actually does, before anyone gets excited. Cheaper to borrow, so mortgages and loans ease off, which is precisely why the next desk is waving at me." },
+  { "desk": "ev",        "text": "[excited] Because four hundred pounds is MY number, narrator, thank you. A decent home battery has dropped to around four thousand pounds installed, and for a typical house that is roughly four hundred quid a year off your electricity bill." },
+  { "desk": "worcester", "text": "[warm] Four hundred pounds a year is a real difference round here, mind. That is the heating you stop rationing in February." },
+  { "desk": "markets",   "text": "[measured] And if the Bank does cut, the finance on that battery gets cheaper too, so the maths only improves. The two stories are the same story." },
+  { "desk": "gaming",    "text": "[laughs] Two desks holding hands over a battery. I am going to need a moment." },
+  { "desk": "host",      "text": "[wry] While the games desk recovers, a quick swerve to Anfield, where the optimism is running slightly ahead of the facts. Which is it, confirmed, or the bit you are hoping for?" },
+  { "desk": "liverpool", "text": "[excited] Honestly, both, and I hate that you asked. The BBC is reporting the new signing passed his medical, that part is confirmed. The fee everyone is quoting is still unconfirmed, pure rumour, so do not quote me on the number." },
+  { "desk": "host",      "text": "[deadpan] You should probably know that a passed medical means he can run, and a rumoured fee means nobody will admit what they paid. Both true, only one of them spendable." },
+  { "desk": "host",      "text": "[serious] One story we will not be light about. The World desk has the news from the floods, and that one we play straight." },
+  { "desk": "world",     "text": "[serious] Reuters is reporting hundreds of people displaced and a number of confirmed deaths after the flooding overnight. Rescue efforts are ongoing, and the immediate need is shelter. We will keep that one sober." },
+  { "desk": "host",      "text": "[measured] Quite right. Before we go, the week ahead, one line each." },
+  { "desk": "markets",   "text": "[measured] The Bank of England this afternoon. Watch the language, not just the decision." },
+  { "desk": "liverpool", "text": "[excited] Arsenal at home, Saturday, half past five, top of the table on the line. I have not slept and I will not be sleeping." },
+  { "desk": "host",      "text": "[wry] The price of money, the price of a charged-up house, and the price of a centre-back nobody will confirm. And yes, the four hundred pounds, I did promise we would get there. That has been The Wire. Mind how you go." }
 ]
 ```
 
-Each turn is `{ "desk": "<category id or 'host'>", "text": "..." }`. The id `"host"` is the dedicated anchor voice; every other id must be a desk `category` that appears in this run.
+Each turn is `{ "desk": "<category id or 'host'>", "text": "..." }`. The id `"host"` is the dedicated narrator voice; every other id must be a desk `category` that appears in this run.
 
 ## 3. POST it to the site
 
