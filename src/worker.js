@@ -834,10 +834,44 @@ function readoutText(it) {
 }
 
 const POD_RENDER_CONCURRENCY = 4;   // dialogue chunks rendered at once (rate-limit safe)
+const POD_DIALOGUE_SEED = 1729;     // fixed seed → reproducible multi-voice takes across chunks
+
+// Branded audio beats: a short intro sting and an outro, generated ONCE via the
+// Eleven Music API and cached in R2, then top-and-tailed onto each episode. Keys
+// are NOT date-scoped (beats are evergreen); bump the _vN suffix to regenerate.
+// (The Music API rejects `seed` alongside `prompt`, so we don't pin a seed; the
+// beat is generated once and cached, so reproducibility doesn't matter.)
+const BEATS = {
+  intro: { key: "beats/intro_v1.mp3", music_length_ms: 6000, prompt: "short bright confident newsroom logo sting, minimal synth and light percussion, builds and resolves cleanly, no vocals" },
+  outro: { key: "beats/outro_v1.mp3", music_length_ms: 3000, prompt: "warm resolving outro chord, gentle, fades out cleanly, no vocals" },
+};
+// Returns the beat's MP3 bytes (cached, or generated+cached on first use), or null
+// on any failure so a missing beat never blocks an episode. output_format is pinned
+// to mp3_44100_128 to MATCH the dialogue: the Music v2 default is 48kHz, which would
+// play at the wrong pitch once byte-concatenated with the 44.1kHz dialogue.
+async function ensureBeat(env, kind) {
+  const b = BEATS[kind];
+  if (!b || !env.WIRE_AUDIO || !env.ELEVENLABS_API_KEY) return null;
+  try {
+    const hit = await env.WIRE_AUDIO.get(b.key);
+    if (hit) return new Uint8Array(await hit.arrayBuffer());
+    const res = await fetch("https://api.elevenlabs.io/v1/music?output_format=mp3_44100_128", {
+      method: "POST",
+      headers: { "xi-api-key": env.ELEVENLABS_API_KEY, "content-type": "application/json" },
+      body: JSON.stringify({ model_id: "music_v2", force_instrumental: true, music_length_ms: b.music_length_ms, prompt: b.prompt }),
+    });
+    if (!res.ok) return null;
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    await env.WIRE_AUDIO.put(b.key, bytes, { httpMetadata: { contentType: "audio/mpeg" } });
+    return bytes;
+  } catch (_) { return null; }
+}
+
 // Render a multi-host podcast from the routine's script (an array of
-// {desk|category, text} turns) via the v3 Text-to-Dialogue API. Dialogue calls
-// cap ~3000 chars, so we pack consecutive turns into chunks and concatenate the
-// returned MP3s (frame-level concat plays fine in browsers). Cached in R2.
+// {desk|category, text} turns) via the v3 Text-to-Dialogue API. Text-to-Dialogue
+// caps at ~2000 chars TOTAL per request, so we pack consecutive turns into chunks
+// (<=1800 for headroom), render them, and concatenate the returned MP3s (frame-level
+// concat plays fine in browsers), top-and-tailed with branded beats. Cached in R2.
 async function renderPodcast(env, turns) {
   const voices = episodeVoices(turns);
   const chunks = []; let cur = []; let len = 0;
@@ -846,19 +880,20 @@ async function renderPodcast(env, turns) {
     if (!text) continue;
     const voice_id = voices[String((t && (t.desk || t.category)) || "")] || voiceFor((t && (t.desk || t.category)) || "");
     const cost = text.length + 24;
-    if (len + cost > 2400 && cur.length) { chunks.push(cur); cur = []; len = 0; }
+    if (len + cost > 1800 && cur.length) { chunks.push(cur); cur = []; len = 0; }
     cur.push({ voice_id, text }); len += cost;
   }
   if (cur.length) chunks.push(cur);
   if (!chunks.length) throw new Error("empty script");
   // Render chunks concurrently (was sequential, which made a ~16-turn script take
   // ~98s). Batched so we don't trip ElevenLabs' concurrent-request limit; order
-  // is preserved within each batch so the dialogue stays in sequence.
+  // is preserved within each batch so the dialogue stays in sequence. A fixed seed
+  // + stability keeps the multi-voice take controlled and reproducible.
   const renderChunk = async inputs => {
     const res = await fetch("https://api.elevenlabs.io/v1/text-to-dialogue?output_format=mp3_44100_128", {
       method: "POST",
       headers: { "xi-api-key": env.ELEVENLABS_API_KEY, "content-type": "application/json" },
-      body: JSON.stringify({ model_id: "eleven_v3", inputs }),
+      body: JSON.stringify({ model_id: "eleven_v3", inputs, settings: { stability: 0.5 }, seed: POD_DIALOGUE_SEED }),
     });
     if (!res.ok) { const e = await res.text().catch(() => ""); throw new Error(`dialogue ${res.status}: ${e.slice(0, 200)}`); }
     return new Uint8Array(await res.arrayBuffer());
@@ -868,9 +903,12 @@ async function renderPodcast(env, turns) {
     const batch = await Promise.all(chunks.slice(i, i + POD_RENDER_CONCURRENCY).map(renderChunk));
     parts.push(...batch);
   }
-  const total = parts.reduce((n, p) => n + p.length, 0);
+  // Top-and-tail with the branded beats (each is a no-op if generation/cache fails).
+  const [intro, outro] = await Promise.all([ensureBeat(env, "intro"), ensureBeat(env, "outro")]);
+  const all = [intro, ...parts, outro].filter(Boolean);
+  const total = all.reduce((n, p) => n + p.length, 0);
   const out = new Uint8Array(total); let off = 0;
-  for (const p of parts) { out.set(p, off); off += p.length; }
+  for (const p of all) { out.set(p, off); off += p.length; }
   return out;
 }
 
@@ -883,9 +921,12 @@ async function sha16(text) {
 // script for the day re-renders once and old keys fall away. Hash the full turns
 // (not a prefix) so long/personalised episodes that share an opening but differ
 // later get distinct keys, rather than colliding onto one cached MP3.
+// Bump POD_RENDER_VERSION whenever the rendering changes (e.g. adding beats) so
+// already-cached episodes re-render with the new audio instead of serving stale.
+const POD_RENDER_VERSION = "v3";
 async function podcastKey(turns, date) {
   const sig = await sha16(JSON.stringify(turns));
-  return `podcast/${date || londonDate()}/${sig}.mp3`;
+  return `podcast/${date || londonDate()}/${sig}-${POD_RENDER_VERSION}.mp3`;
 }
 
 // Ensure today's podcast MP3 is rendered and cached in R2, WITHOUT blocking the
