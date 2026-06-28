@@ -1,4 +1,4 @@
-# The Wire — Jack's edition
+# The Wire
 
 A personal daily news briefing across six desks — **Liverpool, Worcester & UK, Gaming, EV & Battery, Markets, World** — each written in its own voice. British English, £, no ads, no comment columns. Built by Claude with live web search, generated once each morning and cached so it loads instantly.
 
