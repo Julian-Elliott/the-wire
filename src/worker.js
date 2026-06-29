@@ -871,7 +871,10 @@ async function ensureBeat(env, kind) {
 // {desk|category, text} turns) via the v3 Text-to-Dialogue API. Text-to-Dialogue
 // caps at ~2000 chars TOTAL per request, so we pack consecutive turns into chunks
 // (<=1800 for headroom), render them, and concatenate the returned MP3s (frame-level
-// concat plays fine in browsers), top-and-tailed with branded beats. Cached in R2.
+// concat plays fine in browsers). Cached in R2. The branded intro/outro beats are
+// NOT baked in here: they are stereo and the voices are mono, and concatenating the
+// two channel modes makes some players misread the mono voice frames and pitch them
+// up. Instead the player plays the beats as separate audio around the episode.
 async function renderPodcast(env, turns) {
   const voices = episodeVoices(turns);
   const chunks = []; let cur = []; let len = 0;
@@ -903,12 +906,9 @@ async function renderPodcast(env, turns) {
     const batch = await Promise.all(chunks.slice(i, i + POD_RENDER_CONCURRENCY).map(renderChunk));
     parts.push(...batch);
   }
-  // Top-and-tail with the branded beats (each is a no-op if generation/cache fails).
-  const [intro, outro] = await Promise.all([ensureBeat(env, "intro"), ensureBeat(env, "outro")]);
-  const all = [intro, ...parts, outro].filter(Boolean);
-  const total = all.reduce((n, p) => n + p.length, 0);
+  const total = parts.reduce((n, p) => n + p.length, 0);
   const out = new Uint8Array(total); let off = 0;
-  for (const p of all) { out.set(p, off); off += p.length; }
+  for (const p of parts) { out.set(p, off); off += p.length; }
   return out;
 }
 
@@ -923,7 +923,7 @@ async function sha16(text) {
 // later get distinct keys, rather than colliding onto one cached MP3.
 // Bump POD_RENDER_VERSION whenever the rendering changes (e.g. adding beats) so
 // already-cached episodes re-render with the new audio instead of serving stale.
-const POD_RENDER_VERSION = "v3";
+const POD_RENDER_VERSION = "v4";
 async function podcastKey(turns, date) {
   const sig = await sha16(JSON.stringify(turns));
   return `podcast/${date || londonDate()}/${sig}-${POD_RENDER_VERSION}.mp3`;
@@ -1226,6 +1226,17 @@ export default {
     // Stamp the signed-in user as active (rolling 48h); resolveTarget uses this
     // to drop quiet users off personalised builds. Fire-and-forget.
     if (sUid) ctx.waitUntil(touchActive(env, sUid));
+
+    // Branded audio beats, served as SEPARATE audio (the player tops-and-tails the
+    // episode with them). Kept separate because beats are stereo and the voices are
+    // mono; concatenating the two channel modes pitches the voice up in some players.
+    if (url.pathname === "/api/beat") {
+      if (!env.ELEVENLABS_API_KEY || !env.WIRE_AUDIO) return json({ error: "audio not configured" }, 404);
+      const kind = url.searchParams.get("k") === "outro" ? "outro" : "intro";
+      const bytes = await ensureBeat(env, kind);
+      if (!bytes) return json({ error: "beat unavailable" }, 404);
+      return new Response(bytes, { headers: { "content-type": "audio/mpeg", "cache-control": "public, max-age=86400" } });
+    }
 
     // ---- Sign in with Apple endpoints (no-ops unless configured) ----------
     if (url.pathname === "/api/me") {

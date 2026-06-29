@@ -881,11 +881,12 @@ function toggleListen(id){
 }
 
 // ---- daily podcast player (one shared player) ----------------------------
-// The episode renders server-side (ElevenLabs) and caches in R2. It's usually
-// pre-warmed when the feed is built, but on a cold cache we poll readiness and
-// show progress rather than hang the <audio> element on a slow blocking request
-// (which used to leave the button stuck on "…").
-let _pod=null, _podBusy=false;
+// Plays a small playlist: branded intro sting, the episode, then the outro. The
+// beats are SEPARATE audio (not baked into the episode) because they're stereo and
+// the voices are mono; concatenating the two pitches the voice up in some players.
+// The episode renders server-side (ElevenLabs) and caches in R2; it's usually
+// pre-warmed on build, on a cold cache the GET renders (~40s) then streams.
+let _pod=null, _podBusy=false, _podQ=[], _podI=0;
 function syncPod(){
   const b=document.getElementById("podplay"); if(!b) return;
   const playing=!!(_pod && !_pod.paused && !_pod.ended);
@@ -893,23 +894,23 @@ function syncPod(){
   b.classList.toggle("loading",loading);
   b.textContent = loading ? "…" : (playing ? "⏸" : "▶");
 }
-// Attach the audio element to the episode. On a warm cache it plays instantly;
-// on a cold cache the GET renders server-side (~40s) then streams it. If the GET
-// returns 503 (a concurrent render holds the lock), retry shortly — by then it's
-// cached.
-function attachPod(retries){
-  retries = (retries==null) ? 2 : retries;
+function podPlayNext(){
+  if(_podI >= _podQ.length){ _pod=null; const s=document.getElementById("podsub"); if(s) s.textContent="The day's news, talked through"; syncPod(); return; }
+  const track=_podQ[_podI];
   _podBusy=false;
-  _pod=new Audio("/api/podcast/today");
-  ["playing","pause","ended","waiting","canplay"].forEach(ev=> _pod.addEventListener(ev, syncPod));
-  _pod.addEventListener("playing", ()=>{ const s=document.getElementById("podsub"); if(s) s.textContent="The day's news, talked through"; });
+  _pod=new Audio(track.url);
+  ["playing","pause","waiting","canplay"].forEach(ev=> _pod.addEventListener(ev, syncPod));
+  _pod.addEventListener("playing", ()=>{ const s=document.getElementById("podsub"); if(s && track.sub) s.textContent=track.sub; });
+  _pod.addEventListener("ended", ()=>{ _podI++; podPlayNext(); });
   _pod.addEventListener("error", ()=>{
-    _pod=null; const s=document.getElementById("podsub");
-    if(retries>0){
-      if(s) s.textContent="Generating today's episode… (up to a minute)";
-      _podBusy=true; syncPod();
-      setTimeout(()=> attachPod(retries-1), 5000);
-    } else { if(s) s.textContent="Couldn't load the episode, try again shortly."; syncPod(); }
+    // Intro/outro are optional flourishes: if a beat fails, skip straight on.
+    if(track.optional){ _podI++; podPlayNext(); return; }
+    // The episode is essential: a cold GET can briefly 503 while it renders, retry.
+    const s=document.getElementById("podsub");
+    if((track.retries = (track.retries==null ? 2 : track.retries)) > 0){
+      track.retries--; if(s) s.textContent="Generating today's episode… (up to a minute)";
+      _podBusy=true; syncPod(); setTimeout(()=>{ _podBusy=false; podPlayNext(); }, 5000);
+    } else { _pod=null; if(s) s.textContent="Couldn't load the episode, try again shortly."; syncPod(); }
   });
   _pod.play().catch(()=> syncPod());
   syncPod();
@@ -923,7 +924,12 @@ async function podToggle(){
   const m=await podMeta();
   if(!m || !m.turns){ if(sub) sub.textContent="Built with the next refresh."; _podBusy=false; syncPod(); return; }
   if(!m.ready && sub) sub.textContent="Generating today's episode… (up to a minute)";
-  attachPod();   // warm → plays at once; cold → the GET renders, then plays
+  _podQ=[
+    { url:"/api/beat?k=intro", optional:true },
+    { url:"/api/podcast/today", optional:false, sub:"The day's news, talked through" },
+    { url:"/api/beat?k=outro", optional:true },
+  ];
+  _podI=0; _podBusy=false; podPlayNext();
 }
 
 // ---- event wiring (incl. swipe gestures) ---------------------------------
