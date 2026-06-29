@@ -1,0 +1,357 @@
+{
+  "userId": "apple:000568.f45981241ef64b63b087507e6430278f.2254",
+  "items": [
+    {
+      "category": "gaming",
+      "title": "EA to delist tomorrow as $55bn buyout closes",
+      "summary": "Silver Lake, Saudi PIF and Affinity Partners complete the largest leveraged buyout ever, taking EA private after 30 years on the stock market.",
+      "why": "The biggest publisher acquisition in history reshapes who owns the games you play and how they are sold.",
+      "readout": "Electronic Arts will cease trading on the Nasdaq tomorrow, the thirtieth of June, after a consortium led by Silver Lake, the Saudi Public Investment Fund and Affinity Partners completes a fifty-five billion dollar buyout. It is the largest leveraged buyout in recorded history, beating the previous record held by a credit card company. Andrew Wilson stays on as chief executive. EA has been a publicly listed company since 1989, and after tomorrow it will answer only to its new private owners. Whether that means more creative risk-taking or sharper monetisation is a question gamers will be watching closely over the next few years.",
+      "contentType": "News",
+      "source": "tech-insider.org",
+      "url": "https://tech-insider.org/ea-goes-private-55-billion-buyout-2026/",
+      "publishedAt": "2026-06"
+    },
+    {
+      "category": "gaming",
+      "title": "EU rejects Stop Killing Games petition after 1.29 million signatures",
+      "summary": "European Commission declines to legislate on game preservation, offering a voluntary industry code instead of law.",
+      "why": "Millions of gamers could still lose access to purchased games when publishers shut down servers, with no legal protection confirmed.",
+      "readout": "The European Commission has rejected the Stop Killing Games petition despite one million two hundred and ninety-four thousand verified signatures, the largest gaming petition in EU history. Campaigners wanted a law requiring publishers to keep games playable or release preservation tools when they shut down online services. Brussels has instead pointed to voluntary commitments from the industry. Critics note that voluntary codes have rarely succeeded where financial incentives point the other way. The campaign is now considering its next steps, which may include lobbying at the level of individual member states.",
+      "contentType": "News",
+      "source": "tech-insider.org",
+      "url": "https://tech-insider.org/stop-killing-games-eu-commission-2026/",
+      "publishedAt": "2026-06-16"
+    },
+    {
+      "category": "gaming",
+      "title": "Multiple Xbox studios negotiating independence from Microsoft before fiscal year ends",
+      "summary": "Double Fine and others are in talks to spin out or find external backers as Microsoft's fiscal year closes on 30 June.",
+      "why": "More closures may be averted but it signals Microsoft stepping back from owning large numbers of first-party studios.",
+      "readout": "Bloomberg's Jason Schreier is reporting that Double Fine Productions and several other Xbox Game Studios are in active negotiations with Microsoft to buy out their independence or find external backers, as Microsoft's fiscal year closes on the thirtieth of June. Double Fine has publicly acknowledged the talks. The moves follow last year's closures of Tango Gameworks and other studios and suggest a broader strategic retreat by Microsoft from owning a large portfolio of first-party developers. A spin-out would not necessarily mean closure, but it would remove these studios from the Xbox umbrella. At the time of reporting, no deals had been confirmed, so treat the specific studios as still unconfirmed.",
+      "contentType": "News",
+      "source": "Pure Xbox",
+      "url": "https://www.purexbox.com/news/2026/06/report-multiple-xbox-studios-in-active-negotiations-with-microsoft-to-avoid-closure",
+      "publishedAt": "2026-06"
+    },
+    {
+      "category": "ev",
+      "title": "Skoda Peaq seven-seat electric SUV priced from £51,980 in the UK",
+      "summary": "Skoda's flagship electric SUV has 390-mile WLTP range and an 86kWh battery; orders open September 2026.",
+      "why": "A seven-seat family EV with near-400-mile range at under £52,000 is a meaningful new option for UK buyers weighing the switch.",
+      "readout": "Skoda has confirmed UK pricing for the Peaq, its new seven-seat flagship electric SUV, starting from fifty-one thousand nine hundred and eighty pounds for the SE L trim. The Edition model is fifty-five thousand one hundred and thirty pounds and the SportLine starts from fifty-eight thousand two hundred and eighty. The Peaq offers up to three hundred and ninety miles of WLTP range from an eighty-six kilowatt-hour battery, with fast charging at up to one hundred and ninety-nine kilowatts. Orders open in September 2026. This is separate from Skoda's smaller Epiq; the Peaq is a full-size, three-row family SUV competing at the top end of the electric SUV market.",
+      "contentType": "News",
+      "source": "WhichEV",
+      "url": "https://www.whichev.net/2026/06/26/skoda-prices-new-seven-seat-electric-peaq-from-51980-with-up-to-390-miles-of-range/amp/",
+      "publishedAt": "2026-06-26"
+    },
+    {
+      "category": "markets",
+      "title": "FTSE 100",
+      "direction": "down",
+      "changePct": "-0.2%",
+      "summary": "Index closed at 10,508 on Friday, dragged by energy stocks amid Iran-Gulf escalation and the UK economy contracting for a second month.",
+      "why": "Energy-heavy FTSE fell as crude oil swings from the Iran conflict directly hit Shell and BP, which dominate the index.",
+      "readout": "The FTSE 100 closed Friday at ten thousand five hundred and eight, down about a fifth of a percent. Energy stocks led the falls as crude oil swung sharply on continued Middle East uncertainty after Iran struck US military bases in Bahrain and Kuwait on the twenty-eighth. The UK composite PMI falling to forty-nine point four in June, the second consecutive month of contraction, added to the negative tone. UK political uncertainty following Keir Starmer's resignation has also weighed on sentiment. The gilt yield sits at four point seven three percent, keeping pressure on rate-sensitive sectors.",
+      "contentType": "Index move",
+      "source": "Trading Economics",
+      "url": "https://tradingeconomics.com/united-kingdom/stock-market",
+      "publishedAt": "2026-06-27"
+    },
+    {
+      "category": "markets",
+      "title": "Oil (WTI Crude)",
+      "direction": "down",
+      "changePct": "-4%",
+      "summary": "Crude fell four percent to $69 on Friday as Gulf flows partially recovered, then edged back toward $70 Monday on ceasefire signals.",
+      "why": "Oil volatility hits UK energy costs, ISA portfolios heavy in Shell and BP, and feeds directly into CPI inflation.",
+      "readout": "West Texas Intermediate crude fell around four percent on Friday to sixty-nine dollars a barrel, as Saudi Arabia resumed tanker loading at Ras Tanura and Persian Gulf exports partially recovered to around seventy-five percent of pre-conflict levels. On Monday morning, prices were edging back toward seventy dollars following reports that the United States and Iran had agreed to pause further strikes ahead of renewed peace talks. Iran had struck US military bases at Ali Al Salem in Kuwait and at the US Fifth Fleet port in Bahrain on Saturday the twenty-eighth. A durable ceasefire would ease oil further; a fresh escalation could push it back above eighty dollars and directly affect the energy stocks that dominate the FTSE.",
+      "contentType": "Commodity",
+      "source": "Fortune",
+      "url": "https://fortune.com/article/price-of-oil-06-26-2026/",
+      "publishedAt": "2026-06-27"
+    },
+    {
+      "category": "markets",
+      "title": "Bank of England holds at 3.75%; Fed turns hawkish",
+      "direction": "flat",
+      "changePct": null,
+      "summary": "BoE voted 7-2 to hold on 17 June; Fed dot plot shifted hawkish, with nine officials projecting at least one US hike in 2026.",
+      "why": "Both central banks leaning hawkish keeps bond yields elevated, mortgage costs high, and rate-cut hopes further away.",
+      "readout": "The Bank of England held its base rate at three point seven five percent on the seventeenth of June, with a seven to two majority. The two dissenters voted to raise to four percent. Services inflation at three point seven percent is keeping a hike on the table at the next meeting on the thirtieth of July. In the United States, the Federal Reserve also held at three point five to three point seven five percent on the same day but shifted its dot plot in a hawkish direction, with nine of nineteen officials projecting at least one further hike in 2026. Goldman Sachs and JP Morgan have both forecast no US rate cuts this year.",
+      "contentType": "Central bank",
+      "source": "Bank of England",
+      "url": "https://www.bankofengland.co.uk/monetary-policy-summary-and-minutes/2026/june-2026",
+      "publishedAt": "2026-06-17"
+    },
+    {
+      "category": "cat-ai",
+      "title": "OpenAI retires GPT-4.5 as GPT-5.5 rolls out; Codex Remote now open to all",
+      "summary": "ChatGPT's flagship upgraded to GPT-5.5 on 26 June; AI coding agent Codex Remote now available on all subscription plans.",
+      "why": "If you use ChatGPT, you are already on a newer model by default. Codex Remote makes AI-powered autonomous coding available to free and paid tiers alike.",
+      "readout": "OpenAI replaced GPT-4.5 with GPT-5.5 across all ChatGPT plans on the twenty-sixth of June, making the upgrade automatic. At the same time, OpenAI made Codex Remote, its AI coding agent that can run terminal commands and write code autonomously, generally available on all subscription tiers including free. GPT-4.5 was in service for roughly four months. The speed of model succession is accelerating, with each generation now lasting months rather than years before being superseded. Users who had configured workflows around GPT-4.5 should verify that outputs remain consistent under the new model.",
+      "contentType": "News",
+      "source": "OpenAI",
+      "url": "https://openai.com/",
+      "publishedAt": "2026-06-26"
+    },
+    {
+      "category": "cat-ai",
+      "title": "Google DeepMind's Genie 3 generates interactive 3D environments from text",
+      "summary": "DeepMind's new world model foundation creates navigable 3D spaces from a single text prompt, going beyond images or video.",
+      "why": "Genie 3 moves AI from generating flat media to building interactive spaces, a qualitative shift in what AI can produce.",
+      "readout": "Google DeepMind has released Genie 3, a foundation model that generates interactive three-dimensional environments from a text prompt. Unlike image or video generation, the output is a navigable space a user can move through and interact with. Genie 3 is a foundation model intended to be built upon by developers rather than used directly by consumers. The release builds on DeepMind's earlier Genie work and extends it into three dimensions, raising questions about applications in gaming, robotics training and simulation. No consumer product has been announced yet.",
+      "contentType": "News",
+      "source": "Google DeepMind",
+      "url": "https://deepmind.google/",
+      "publishedAt": "2026-06"
+    },
+    {
+      "category": "cat-ai",
+      "title": "Meta cuts 8,000 jobs and reassigns 7,000 more in AI-focused restructuring",
+      "summary": "Meta laid off roughly ten percent of its workforce and moved thousands more to AI teams in its biggest cut since 2022.",
+      "why": "The scale of Meta's AI pivot signals how much pressure all major tech companies face to centre operations on AI.",
+      "readout": "Meta has cut approximately eight thousand employees, around ten percent of its total workforce, as part of a restructuring focused on artificial intelligence. A further seven thousand employees have been reassigned to AI-specific teams rather than let go. The company said the moves are intended to accelerate AI development and reduce headcount in areas it considers less central to its future. It is the largest round of Meta redundancies since 2022. The restructuring mirrors similar cuts at Google, Microsoft and Amazon over the past two years, with each framing the reductions as an investment in AI rather than a response to a downturn.",
+      "contentType": "News",
+      "source": "TechCrunch",
+      "url": "https://techcrunch.com/",
+      "publishedAt": "2026-06"
+    },
+    {
+      "category": "cat-gadgets",
+      "title": "Windows 11 receives its biggest 2026 update with faster apps and improved search",
+      "summary": "Microsoft's 28 June update speeds up app launches, redesigns Start and Search, and drops the search trigger from three characters to two.",
+      "why": "The update is already live via Windows Update and makes the most-used parts of Windows 11 meaningfully faster.",
+      "readout": "Microsoft released the largest Windows 11 update of 2026 on the twenty-eighth of June, delivering measurable speed improvements to app launch, the Start menu, Search and the Action Centre. The minimum character count before Search begins returning results has been reduced from three to two, which sounds marginal but is noticeable in daily use. The update arrives automatically via Windows Update. Windows Latest described it as a meaningful step-change in everyday responsiveness rather than a feature drop for enthusiasts. Users on Windows 11 version 24H2 or later receive it automatically.",
+      "contentType": "News",
+      "source": "Windows Latest",
+      "url": "https://www.windowslatest.com/2026/06/11/all-major-features-in-windows-11-june-2026-patch-tuesday-update/",
+      "publishedAt": "2026-06-28"
+    },
+    {
+      "category": "cat-space",
+      "title": "SpaceX launches SiriusXM SXM-11 satellite on Falcon 9 from Florida",
+      "summary": "A 230-foot SXM-11 satellite lifted off from Florida's Space Coast on 28 June aboard a Falcon 9 rocket.",
+      "why": "Another commercial launch in Falcon 9's relentless cadence, confirming the rocket as the world's dominant orbital workhorse.",
+      "readout": "SpaceX launched the SiriusXM SXM-11 communications satellite on the twenty-eighth of June from Florida's Space Coast aboard a Falcon 9. The satellite, built by Intuitive Machines, stands over two hundred and thirty feet tall when mated to its rocket and will join the SiriusXM constellation providing satellite radio coverage across North America. The mission is another in the high-cadence schedule of Falcon 9 flights that has made SpaceX the world's dominant launch provider by number of missions flown. The booster made a successful landing following stage separation.",
+      "contentType": "News",
+      "source": "Spaceflight Now",
+      "url": "https://spaceflightnow.com/",
+      "publishedAt": "2026-06-28"
+    },
+    {
+      "category": "cat-space",
+      "title": "Los Alamos confirms long-duration gamma-ray bursts come from neutron stars collapsing into black holes",
+      "summary": "Decades-long astrophysics dispute resolved: the most energetic cosmic events traced to a single neutron-star collapse mechanism.",
+      "why": "Resolves a foundational question about the most powerful events in the universe and validates theoretical models of neutron-star collapse.",
+      "readout": "Researchers at Los Alamos National Laboratory have confirmed that long-duration gamma-ray bursts, among the most energetic events in the known universe, originate from neutron stars collapsing into black holes. The finding settles a decades-long debate about whether this class of burst was produced by collapsing massive stars or a different mechanism entirely. The confirmation matched burst data to theoretical models of neutron-star collapse timing and luminosity. It provides a cleaner picture of how the universe's most violent events are generated and will inform future gravitational wave and electromagnetic follow-up observations.",
+      "contentType": "Science",
+      "source": "ScienceDaily",
+      "url": "https://www.sciencedaily.com/",
+      "publishedAt": "2026-06"
+    },
+    {
+      "category": "cat-space",
+      "title": "China's Tianwen-2 enters orbit around asteroid Kamoʻoalewa",
+      "summary": "Chinese spacecraft completed orbit insertion around the near-Earth asteroid in June, with sample collection planned for July.",
+      "why": "First mission to orbit and sample a suspected lunar fragment, advancing the growing competition in asteroid science.",
+      "readout": "China's Tianwen-2 spacecraft successfully entered orbit around the near-Earth asteroid Kamoʻoalewa in June 2026, completing a precise navigation challenge at a small and irregularly shaped target. Kamoʻoalewa is believed to be a fragment of the Moon, making it an unusual subject for a sample-return mission. Sample collection is planned for July, with the spacecraft set to return the material to Earth. Tianwen-2 builds on the success of Tianwen-1's Mars mission and positions China as a significant player in solar system exploration alongside NASA's ongoing asteroid programmes.",
+      "contentType": "Science",
+      "source": "Space.com",
+      "url": "https://www.space.com/",
+      "publishedAt": "2026-06"
+    },
+    {
+      "category": "cat-science",
+      "title": "Researchers reconstruct ten-second videos from mouse brain activity",
+      "summary": "Scientists decoded visual neural signals from a mouse watching video clips to recreate the footage the animal was seeing.",
+      "why": "Demonstrates that moving visual memory can be read directly from brain signals, with implications for brain-computer interfaces.",
+      "readout": "Researchers have successfully decoded ten seconds of video footage from the neural activity recorded in a mouse's visual cortex, reconstructing the clips the animal was watching during the experiment. The technique maps patterns of neural activation to the visual content that produced them, effectively reading the mouse's visual memory as a moving image. Published in June 2026, the work extends earlier research in still-image reconstruction to moving video for the first time in a mammalian brain. The researchers note that scaling the approach to humans would require substantial additional work, but the underlying principle is now demonstrated.",
+      "contentType": "Science",
+      "source": "ScienceDaily",
+      "url": "https://www.sciencedaily.com/",
+      "publishedAt": "2026-06-28"
+    },
+    {
+      "category": "cat-science",
+      "title": "New material converts sunlight into UV light, opening route to solar-powered purification",
+      "summary": "Scientists created a material that upconverts visible light to ultraviolet using natural sunlight, overcoming a longstanding barrier.",
+      "why": "Could enable self-powered air and water purification systems that work anywhere sunlight reaches, without a grid connection.",
+      "readout": "Scientists have developed a material that converts visible sunlight directly into higher-energy ultraviolet light, a process called upconversion that previously required specialised laser sources to achieve at useful intensities. The breakthrough was published on the twenty-sixth of June and opens a route to solar-driven chemical reactions that normally require UV light, including air purification, water disinfection and certain industrial syntheses. The material functions under natural sunlight rather than concentrated or artificial light, making it potentially practical for remote or off-grid applications.",
+      "contentType": "Science",
+      "source": "ScienceDaily",
+      "url": "https://www.sciencedaily.com/",
+      "publishedAt": "2026-06-26"
+    },
+    {
+      "category": "cat-science",
+      "title": "Heliconius butterflies' secret to exceptional longevity decoded",
+      "summary": "Scientists identified the genetic mechanism allowing Heliconius butterflies to live several times longer than closely related species.",
+      "why": "The genetic pathway could point toward mechanisms relevant to ageing biology in other species, including vertebrates.",
+      "readout": "Researchers have identified the genetic mechanism that allows Heliconius butterflies to live several times longer than closely related species with otherwise similar biology. Heliconius are already unusual among insects for their learning ability and spatial memory. The new findings, published in June 2026, pinpoint specific genetic pathways that regulate ageing and cellular maintenance differently from their shorter-lived relatives. The researchers describe these pathways as candidates for further investigation in ageing biology more broadly, with potential relevance beyond insects.",
+      "contentType": "Science",
+      "source": "Nature",
+      "url": "https://www.nature.com/",
+      "publishedAt": "2026-06"
+    },
+    {
+      "category": "cat-money",
+      "title": "UK economy contracts for second month as PMI falls to 14-month low",
+      "summary": "UK composite PMI fell to 49.4 in June, the second consecutive month below 50, signalling a weakening economy.",
+      "why": "Two months of contraction signal a weakening UK economy, complicating rate-cut hopes and the government's fiscal position.",
+      "readout": "The S and P Global composite purchasing managers index for the UK fell to forty-nine point four in June, the lowest reading in fourteen months and the second consecutive month below fifty. A reading below fifty indicates the economy is contracting. Both the services and manufacturing sectors contributed to the decline. The result complicates the Bank of England's position: policymakers must weigh a weakening economy against services inflation still running at three point seven percent. Oxford Economics now expects the Bank to hold rates at three point seven five percent well into 2027.",
+      "contentType": "Economic data",
+      "source": "S&P Global",
+      "url": "https://www.spglobal.com/",
+      "publishedAt": "2026-06"
+    },
+    {
+      "category": "cat-money",
+      "title": "Average five-year fixed mortgage at 5.63% as Savills cuts house price forecast to -2%",
+      "summary": "Two-year fixes have fallen to 4.25% but Savills now forecasts UK house prices to drop 2% across 2026.",
+      "why": "Buyers and existing owners need to know whether to fix now, and whether prices will keep falling when they remortgage.",
+      "readout": "The average five-year fixed mortgage rate is now five point six three percent, down from around five point nine percent a year ago, while the average two-year fixed has fallen to four point two five percent as lenders compete on price. The reductions are modest relative to the pre-rate-rise era. Property research firm Savills has revised its 2026 house price forecast downward, now expecting values to fall around two percent across the year, revising earlier more optimistic projections. Buyers hoping for a meaningful recovery in house prices may need to wait into 2027 or beyond.",
+      "contentType": "Personal finance",
+      "source": "Which?",
+      "url": "https://www.which.co.uk/",
+      "publishedAt": "2026-06"
+    },
+    {
+      "category": "cat-film",
+      "title": "Nolan's The Odyssey confirmed with Matt Damon, Anne Hathaway and Tom Holland",
+      "summary": "Christopher Nolan is adapting Homer's Odyssey with Matt Damon as Odysseus, Anne Hathaway as Penelope, Tom Holland as Telemachus.",
+      "why": "Nolan directing a major classical epic with an A-list cast is one of the biggest film announcements of the year.",
+      "readout": "Christopher Nolan has confirmed the lead cast for his adaptation of Homer's Odyssey: Matt Damon will play Odysseus, Anne Hathaway plays Penelope and Tom Holland takes the role of Telemachus. Nolan is known for ambitious large-scale productions, and a full treatment of the Odyssey at his scale is among the most anticipated film projects in the near term. No UK release date or distributor has been confirmed at the time of reporting. The announcement has generated significant attention given the scale of the talent and the director's track record with epic material.",
+      "contentType": "Film news",
+      "source": "Entertainment Weekly",
+      "url": "https://ew.com/",
+      "publishedAt": "2026-06"
+    },
+    {
+      "category": "cat-film",
+      "title": "Jackass: Best and Last opens in UK cinemas from 28 June",
+      "summary": "The franchise's self-declared final instalment is now showing in UK cinemas, marking the end of 25 years of controlled chaos.",
+      "why": "One of the most distinctive comedy franchises of the past quarter-century closes with its UK theatrical release.",
+      "readout": "Jackass: Best and Last, the franchise's self-declared final instalment, opened in UK cinemas on the twenty-eighth of June. The film is presented as a greatest-hits farewell featuring the original cast. Jackass began as an MTV television series in 2000 before generating four cinema releases. The franchise is notable for maintaining genuine audience loyalty across twenty-five years. The marketing makes no ambiguity about the intention to close the series, though whether this is truly the final outing in any form remains, historically speaking, an open question.",
+      "contentType": "Film news",
+      "source": "IMDB",
+      "url": "https://www.imdb.com/",
+      "publishedAt": "2026-06-28"
+    },
+    {
+      "category": "ckw6rbf",
+      "title": "Micron Q3 revenue quadruples to $41.45bn as AI memory demand soars",
+      "summary": "Micron reported $28.2bn quarterly profit and $41.45bn revenue, driven entirely by NVIDIA and Anthropic memory contracts.",
+      "why": "AI infrastructure spending is lifting commodity memory makers into the same valuation bracket as the biggest tech companies, reshaping the chip sector.",
+      "readout": "Micron Technology reported its fiscal third-quarter results on the twenty-eighth of June with revenue of forty-one point four five billion dollars, a quadrupling year-on-year, and profits of twenty-eight point two billion dollars, up from one point eight eight billion in the same period last year. The results were driven entirely by AI-related memory chip demand, with supply agreements in place with NVIDIA and Anthropic. Micron's market capitalisation briefly surpassed those of both Meta and Tesla simultaneously, reaching approximately one point two seven trillion dollars. Wall Street is now widely describing Micron as the memory equivalent of NVIDIA, and the stock has re-rated dramatically on AI infrastructure spend expectations.",
+      "contentType": "Earnings",
+      "source": "TechCrunch",
+      "url": "https://techcrunch.com/2026/06/28/why-wall-street-thinks-us-memory-maker-micron-is-the-next-nvidia/",
+      "publishedAt": "2026-06-28"
+    },
+    {
+      "category": "ckw6rbf",
+      "title": "EA's $55bn private equity buyout closes tomorrow, the largest LBO on record",
+      "summary": "Silver Lake, Saudi Arabia's PIF and Affinity Partners complete gaming's biggest-ever leveraged buyout on 30 June.",
+      "why": "The deal confirms that sovereign wealth funds and private equity view gaming's live-service revenue streams as stable enough collateral for nine-figure debt.",
+      "readout": "The fifty-five billion dollar leveraged buyout of Electronic Arts by Silver Lake Capital, Saudi Arabia's Public Investment Fund and Affinity Partners closes on the thirtieth of June, making it the largest leveraged buyout ever recorded. EA was founded in 1982 and has been publicly listed since 1989. The deal structure is heavily leveraged, meaning EA will take on significant debt as part of the transaction. For the private equity and sovereign wealth industry, it establishes that gaming portfolios, including live-service revenue streams and intellectual property libraries, are now considered stable enough collateral for this scale of borrowing. Every other major publisher board will be reassessing its valuation in light of this deal.",
+      "contentType": "Business",
+      "source": "tech-insider.org",
+      "url": "https://tech-insider.org/ea-goes-private-55-billion-buyout-2026/",
+      "publishedAt": "2026-06"
+    },
+    {
+      "category": "ckw6rbf",
+      "title": "USMCA trade agreement hits six-year review deadline tomorrow; Trump signals non-renewal",
+      "summary": "The US-Mexico-Canada Agreement faces its mandatory review on 1 July, with Trump publicly suggesting the US may walk away.",
+      "why": "Non-renewal would revert tariffs to pre-2020 levels and create significant disruption for any business with North American supply chain exposure.",
+      "readout": "The USMCA, the trade agreement governing roughly one point three trillion dollars in annual trade between the United States, Mexico and Canada, reaches its six-year review deadline on the first of July. President Trump has signalled publicly that the United States may decline to renew, saying the country does not need what Canada has to offer. The agreement is central to the integrated North American supply chain, particularly in automotive, agricultural and technology sectors. A failure to renew would revert tariffs to pre-2020 WTO levels and create significant uncertainty for companies operating across the border. At the time of reporting, no formal decision has been announced.",
+      "contentType": "Business",
+      "source": "Bloomberg",
+      "url": "https://www.bloomberg.com/",
+      "publishedAt": "2026-06-27"
+    }
+  ],
+  "podcast": [
+    {
+      "desk": "host",
+      "text": "[deadpan] There is a number that will be printed on exactly nothing after midnight tomorrow, and that number is fifty-five billion dollars. By the close of trading on the thirtieth of June, Electronic Arts will have left the stock market after more than thirty years as a public company. This is The Wire, and the thread today is last days."
+    },
+    {
+      "desk": "gaming",
+      "text": "[wry] Silver Lake, the Saudi sovereign wealth fund and a firm called Affinity Partners are handing over fifty-five billion dollars for the right to own EA without anyone asking awkward questions at an AGM. The largest leveraged buyout in recorded history, and EA beat the previous record holder, a credit card company, while carrying a back catalogue of annual sports updates."
+    },
+    {
+      "desk": "ckw6rbf",
+      "text": "[amused] I am choosing impressed. That is private equity deciding that live-service gaming revenue and intellectual property libraries are safe enough to take on nine-figure debt for. It also sets a floor for what a major publisher is worth, and every other publisher's board just noticed."
+    },
+    {
+      "desk": "gaming",
+      "text": "[laughs] And the other last-day story: the Stop Killing Games petition. One million two hundred and ninety-four thousand signatures asking the EU to legally protect games from server shutdowns. Brussels said no. Voluntary industry code only. Which has historically been the industry's favourite way of promising to do the thing it will not be doing."
+    },
+    {
+      "desk": "host",
+      "text": "[deadpan] You should probably know that in the history of voluntary industry codes, the industries that wrote them have a compliance record that can be described, generously, as aspirational. One point two nine million signatures, and the answer was still no."
+    },
+    {
+      "desk": "cat-ai",
+      "text": "[measured] There is a theme here. GPT-4.5 was also switched off on the twenty-sixth. OpenAI moved everyone to GPT-5.5 automatically, no warning required. And Codex Remote, the AI coding agent that can run your terminal for you, is now available on all plans. Things end and the replacement is already live."
+    },
+    {
+      "desk": "cat-gadgets",
+      "text": "[excited] Meanwhile something actually got better without anything dying. Windows 11 got its biggest update of the year on the twenty-eighth: apps launch faster, and search now triggers on two characters instead of three. That sounds small. For anyone who types quickly in the morning it is not small at all."
+    },
+    {
+      "desk": "cat-ai",
+      "text": "[wry] Google DeepMind also released Genie 3 this month, which generates interactive three-dimensional worlds from a text prompt. You can walk around in them. And Meta cut eight thousand people while moving seven thousand more into AI teams. New worlds, fewer humans to inhabit them. The ratio is moving in one direction."
+    },
+    {
+      "desk": "ckw6rbf",
+      "text": "[measured] Which is why the Micron numbers matter so much. Quarterly revenue of forty-one point four five billion dollars, quadrupled year on year, all of it AI memory demand from NVIDIA and Anthropic. Micron's market cap briefly passed Meta and Tesla simultaneously. The hardware powering all of this AI is the actual business now, and it is one of the most valuable on earth."
+    },
+    {
+      "desk": "markets",
+      "text": "[thoughtful] And yet the FTSE is sitting at ten thousand five hundred and eight, down a fifth of a percent on Friday. The index is heavily weighted to energy and crude oil fell four percent to sixty-nine dollars a barrel after Iran struck US military bases in Bahrain and Kuwait on the twenty-eighth. Not a sentence that helps any of the energy stocks settle."
+    },
+    {
+      "desk": "host",
+      "text": "[wry] A detail worth having here: the Bank of England held rates at three point seven five percent on the seventeenth, with two members voting to go higher. The Federal Reserve also held, but shifted its dot plot hawkish. Both central banks are, for now, leaning toward keeping things expensive. The thirty-first of July BoE meeting will be interesting."
+    },
+    {
+      "desk": "ev",
+      "text": "[excited] Which makes the Skoda Peaq interesting timing. Seven seats, three hundred and ninety miles of WLTP range, orders opening September, from fifty-one thousand nine hundred and eighty pounds. That is a lot of family car. If rates start coming down in 2027, the finance on this gets genuinely attractive."
+    },
+    {
+      "desk": "cat-money",
+      "text": "[measured] The tricky part is the economy underneath. UK composite PMI dropped to forty-nine point four in June, second consecutive month of contraction. Below fifty means shrinking. The average five-year fixed mortgage is five point six three percent. Savills is now forecasting house prices to fall two percent across 2026."
+    },
+    {
+      "desk": "markets",
+      "text": "[thoughtful] PMI at forty-nine point four puts the Bank of England in an uncomfortable position at the end of July. Hold rates to let a contracting economy breathe, or hold firm on services inflation that is still at three point seven percent. It is not an easy room to be in."
+    },
+    {
+      "desk": "cat-space",
+      "text": "[excited] Completely different register, but SpaceX launched a SiriusXM satellite on the twenty-eighth, Falcon 9, two hundred and thirty feet tall, from Florida's Space Coast. And Los Alamos National Laboratory confirmed this month that long-duration gamma-ray bursts come from neutron stars collapsing into black holes. A mystery astrophysicists had argued about for decades, solved."
+    },
+    {
+      "desk": "cat-science",
+      "text": "[amused] And researchers decoded ten seconds of video from the brain activity of a mouse that was watching that video. They reconstructed the actual footage from the neural signals. The mouse had no idea it was making scientific history, which is probably for the best."
+    },
+    {
+      "desk": "host",
+      "text": "[deadpan] You should probably know that the ten seconds of video the mouse helped reconstruct were described in the published paper as unremarkable in content. The science is extraordinary. The clip itself was not the point. Moving on."
+    },
+    {
+      "desk": "cat-film",
+      "text": "[warm] Christopher Nolan has confirmed the cast for The Odyssey: Matt Damon as Odysseus, Anne Hathaway as Penelope, Tom Holland as Telemachus. No release date yet. And at the other end of the cultural spectrum, Jackass: Best and Last opened in UK cinemas on the twenty-eighth. The franchise says it is the final one. We shall see."
+    },
+    {
+      "desk": "host",
+      "text": "[measured] Before we go, two things to watch by midnight. EA officially delists tomorrow, the thirtieth of June. And the USMCA trade agreement, governing one point three trillion dollars in North American trade, hits its six-year review deadline on the first of July. Trump has said the United States may not renew. Both worth watching."
+    },
+    {
+      "desk": "host",
+      "text": "[wry] Fifty-five billion dollars to take a company off the stock market. Eight thousand jobs cut to put AI on. A mouse that read its own memories. And an economy, technically, contracting while house prices quietly drift. That has been The Wire. Last days, and mind how you go."
+    }
+  ]
+}
