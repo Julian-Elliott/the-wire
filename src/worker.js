@@ -1503,6 +1503,20 @@ async function verifyAppleIdToken(env, idToken, expectedNonce) {
   return payload;
 }
 
+// ---- MusicKit developer token (radio mode, #32) ---------------------------
+// The Worker mints the short-lived ES256 developer token from the .p8 secret;
+// the private key never reaches the browser. Dormant until all three are set.
+const musickitEnabled = env => !!(env.MUSICKIT_PRIVATE_KEY && env.MUSICKIT_KEY_ID && env.APPLE_TEAM_ID);
+async function musickitToken(env) {
+  const pem = String(env.MUSICKIT_PRIVATE_KEY).replace(/-----(BEGIN|END) PRIVATE KEY-----/g, "").replace(/\s+/g, "");
+  const key = await crypto.subtle.importKey("pkcs8", b64urlToBytes(pem), { name: "ECDSA", namedCurve: "P-256" }, false, ["sign"]);
+  const now = Math.floor(Date.now() / 1000);
+  const body = strToB64url(JSON.stringify({ alg: "ES256", kid: env.MUSICKIT_KEY_ID })) + "." +
+    strToB64url(JSON.stringify({ iss: env.APPLE_TEAM_ID, iat: now, exp: now + 12 * 3600 }));
+  const sig = new Uint8Array(await crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, key, new TextEncoder().encode(body)));
+  return body + "." + bytesToB64url(sig);   // WebCrypto emits raw r||s — exactly JWS ES256
+}
+
 // The signed-in user's id (from the session cookie), if any.
 async function sessionUid(env, request) {
   const s = await verifyToken(env, getCookie(request, "sess"));
@@ -1619,6 +1633,19 @@ ${items.join("\n")}
       const obj = await env.WIRE_AUDIO.get(key);
       if (!obj) return json({ error: "episode expired" }, 404);
       return new Response(obj.body, { headers: { "content-type": "audio/mpeg", "accept-ranges": "bytes", "content-length": String(size), "cache-control": "public, max-age=86400" } });
+    }
+
+    // MusicKit developer token for radio mode (cached ~6h; tokens live 12h).
+    if (url.pathname === "/api/musickit-token") {
+      if (!musickitEnabled(env)) return json({ error: "MusicKit not configured" }, 404);
+      try {
+        let tok = env.WIRE_KV ? await env.WIRE_KV.get("musickit:token") : null;
+        if (!tok) {
+          tok = await musickitToken(env);
+          if (env.WIRE_KV) await env.WIRE_KV.put("musickit:token", tok, { expirationTtl: 6 * 3600 });
+        }
+        return json({ token: tok });
+      } catch (e) { return json({ error: "token mint failed", detail: String(e) }, 500); }
     }
 
     // ---- Sign in with Apple endpoints (no-ops unless configured) ----------

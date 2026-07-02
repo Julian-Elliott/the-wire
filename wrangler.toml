@@ -42,6 +42,11 @@ custom_domain = true
 [vars]
 APPLE_CLIENT_ID = "desk.databased.business"
 APPLE_REDIRECT_URI = "https://desk.databased.business/auth/apple/callback"
+# MusicKit (radio mode): key id + team id are public-safe (they appear in every
+# developer token). The private key is the secret MUSICKIT_PRIVATE_KEY
+# (wrangler secret put — NOT here). Radio mode stays dormant until all three exist.
+MUSICKIT_KEY_ID = "6KK6CS2PCZ"
+APPLE_TEAM_ID = "7BL94Z94QH"
 # MODEL = "claude-sonnet-4-6"   # optional model override
 
 # Shared-feed source. Leave unset to generate the shared briefing via the
