@@ -63,7 +63,7 @@ That's it. From then on it refreshes itself every morning.
 
 ---
 
-## Send Jack the link
+## Send the link
 Just share the `workers.dev` URL. Want a nicer address? Add a custom domain in the
 Cloudflare dashboard (Workers & Pages → your worker → Settings → Domains & Routes),
 or in `wrangler.toml` via a `route`. On a phone he can "Add to Home Screen" for an app-like icon.
