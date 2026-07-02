@@ -265,7 +265,7 @@ function saveProfile(){ try{ localStorage.setItem(LS.profile, JSON.stringify(sta
 const state = {
   uid: getUid(),
   profile: loadProfile(),
-  data: null, error: null, loading: true, filter: "all", awaitGen: null, armNext: false,
+  data: null, error: null, loading: true, filter: "all", awaitGen: null, armNext: false, showEarlier: false,
   showSettings: false, showAddDesk: false, toast: null,
   read: new Set(), dismissed: new Set(), seen: {}, cooldown: null,
   seenBefore: (function(){ try{ return localStorage.getItem("jackwire:lastseen")||""; }catch(_){ return ""; } })(),
@@ -415,9 +415,19 @@ state.seen = loadSeen();
 function baseItems(){
   if(!state.data || !state.data.items) return [];
   return state.data.items
-    .filter(i => !state.read.has(i.id) && !state.dismissed.has(itemKeyClient(i)) && !seenPrior(i))
+    .filter(i => !state.dismissed.has(itemKeyClient(i)))                                  // left-swiped stays gone
+    .filter(i => state.showEarlier || (!state.read.has(i.id) && !seenPrior(i)))           // read/seen recoverable via "show earlier"
     .filter(i => deskLive(i.category))   // removed desks (built-in OR custom) hide instantly
     .filter(i => (w()[i.contentType]||0) > MUTE_FLOOR);
+}
+// Stories hidden only because they were read/seen — the count behind the
+// "Show N from earlier today" recovery button (never dismissed/muted ones).
+function earlierCount(){
+  if(!state.data || !state.data.items || state.showEarlier) return 0;
+  return state.data.items
+    .filter(i => !state.dismissed.has(itemKeyClient(i)) && deskLive(i.category) && (w()[i.contentType]||0) > MUTE_FLOOR)
+    .filter(i => state.filter==="all" || i.category===state.filter)
+    .filter(i => state.read.has(i.id) || seenPrior(i)).length;
 }
 function visibleItems(){
   return baseItems()
@@ -887,9 +897,11 @@ function render(){
     feedHtml = `<div class="skeletons">${"<div class='sk'></div>".repeat(4)}</div>`;
   } else if(items.length===0 && state.data && state.data.items && state.data.items.length){
     const rest = state.filter!=="all" ? baseItems().length : 0;
+    const earlier = earlierCount();
     feedHtml = `<div class="empty"><div class="empty-h">All caught up.</div>
       <p class="empty-p">${rest?`You’ve read everything on this desk.`:`You’ve read everything for now — more arrives with the next edition.`}</p>
-      ${rest?`<button class="refresh" data-filter="all">Show all desks · ${rest} waiting</button>`:""}</div>`;
+      ${rest?`<button class="refresh" data-filter="all">Show all desks · ${rest} waiting</button>`:""}
+      ${earlier?`<div style="margin-top:${rest?'10px':'0'}"><button class="linkbtn" id="show-earlier">Show ${earlier} from earlier today</button></div>`:""}</div>`;
   } else if(items.length===0){
     feedHtml = `<div class="empty"><div class="empty-h">Nothing here yet.</div>
       <p class="empty-p">${esc(sumLine)}</p>${deskReport(report)}</div>`;
@@ -1274,26 +1286,36 @@ function wire(){
   }
   document.querySelectorAll("[data-restore]").forEach(b=> b.onclick = ()=> restoreType(b.dataset.restore));
   $("markall") && ($("markall").onclick = ()=>{
-    visibleItems().forEach(it=>{ state.read.add(it.id); addDismissed(it); });
+    visibleItems().forEach(it=>{ state.read.add(it.id); });   // read (recoverable), NOT dismissed — mark-all is not "never show again"
     saveRead(); render();
   });
+  $("show-earlier") && ($("show-earlier").onclick = ()=>{ state.showEarlier = true; render(); });
 
-  // Record "seen" only when a card is actually on screen — items below the
-  // fold stay unseen and survive to the next visit.
+  // Record "seen" only when a card DWELLS on screen (~1.2s at 60% visible) —
+  // fast scrolling isn't reading, and a skim-then-reload must not hide the
+  // whole edition. Items below the fold stay unseen for the next visit.
   if(window.__seenObs) window.__seenObs.disconnect();
+  if(window.__seenPend){ for(const t of window.__seenPend.values()) clearTimeout(t); }
+  window.__seenPend = new Map();
   if("IntersectionObserver" in window){
+    const pend = window.__seenPend;
     window.__seenObs = new IntersectionObserver(ents=>{
-      const seen=[];
       for(const en of ents){
-        if(!en.isIntersecting) continue;
-        const it = state.data && state.data.items && state.data.items.find(x=>x.id===en.target.dataset.id);
-        if(it) seen.push(it);
-        window.__seenObs.unobserve(en.target);
+        const el = en.target;
+        if(en.isIntersecting){
+          if(!pend.has(el)) pend.set(el, setTimeout(()=>{
+            pend.delete(el);
+            const it = state.data && state.data.items && state.data.items.find(x=>x.id===el.dataset.id);
+            if(it) recordSeen([it]);
+            window.__seenObs.unobserve(el);
+          }, 1200));
+        } else {
+          const t = pend.get(el); if(t){ clearTimeout(t); pend.delete(el); }
+        }
       }
-      if(seen.length) recordSeen(seen);
     }, { threshold: 0.6 });
     document.querySelectorAll(".card[data-id]").forEach(c=> window.__seenObs.observe(c));
-  } else if(state.data && state.data.items){ recordSeen(visibleItems()); }
+  }
 
   document.querySelectorAll(".card[data-id], .card[data-onboard]").forEach(card=>{
     const id = card.dataset.id;
