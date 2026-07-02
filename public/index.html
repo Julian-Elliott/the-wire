@@ -131,6 +131,7 @@ a{ color:inherit; text-decoration:none; }
 .desk-note:focus{ outline:none; border-color:var(--amber); }
 .desk-note::placeholder{ color:var(--faint); }
 .desk-lean{ font-family:'JetBrains Mono',monospace; font-size:10.5px; color:var(--muted); margin-top:7px; }
+.mini-sel{ background:var(--panel); border:1px solid var(--line); color:var(--text); border-radius:7px; padding:4px 8px; font-size:11.5px; font-family:'Inter',sans-serif; }
 
 .hero{ max-width:760px; margin:0 auto; padding:26px 20px 8px; }
 .hello{ font-family:'Bricolage Grotesque',sans-serif; font-weight:700; font-size:30px; margin:0 0 6px; letter-spacing:-.015em; }
@@ -266,7 +267,7 @@ const state = {
 function markSetupDone(){ state.setupDone=true; try{ localStorage.setItem("jackwire:setup","1"); }catch(_){} }
 function profileCustomised(){ const d=state.profile.desks, p=state.profile;
   return (d.disabled&&d.disabled.length)||(d.custom&&d.custom.length)||Object.keys(p.weights||{}).length
-    ||Object.keys(p.notes||{}).length||((p.deskOrder||[]).length); }
+    ||Object.keys(p.notes||{}).length||((p.deskOrder||[]).length)||Object.keys(p.styles||{}).length||!!p.window; }
 
 const esc = s => String(s==null?"":s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 // Fallback "source" for items the routine didn't label: the URL's domain.
@@ -341,7 +342,8 @@ function rankScore(it){
   let rec = 0;
   if(it.addedAt){ const ageH = (Date.now() - Date.parse(it.addedAt)) / 3600000; rec = Math.max(0, 24 - ageH); } // ~24 fresh → 0 over a day
   const newBoost = isNew(it) ? 3 : 0;
-  return rec + newBoost + score(it) * 2; // recency(hrs) + new nudge + learned preference
+  const sal = it.salience ? (it.salience - 3) * 5 : 0;   // editorial prominence (1-5 from the researcher): a front-pager beats ~10h of recency
+  return rec + newBoost + sal + score(it) * 2; // recency(hrs) + new nudge + world salience + learned preference
 }
 function deskTypes(id){ if(CATS[id]) return CATS[id].types||[]; const cd=customById(id); return (cd&&cd.types)||[]; }
 
@@ -422,7 +424,8 @@ function saveRead(){ try{ localStorage.setItem(LS.read, JSON.stringify({ date: s
 function profileForServer(){
   const dis = state.profile.desks.disabled||[];
   const enabled = dis.length ? BUILTIN_ORDER.filter(id=>!dis.includes(id)) : null;
-  return { desks:{ enabled, custom: state.profile.desks.custom||[] }, weights: w(), notes: state.profile.notes||{}, deskOrder: state.profile.deskOrder||[] };
+  return { desks:{ enabled, custom: state.profile.desks.custom||[] }, weights: w(), notes: state.profile.notes||{}, deskOrder: state.profile.deskOrder||[],
+    styles: state.profile.styles||{}, window: state.profile.window||null };
 }
 async function putProfile(regenerate){
   // Personalising is a signed-in feature now; anon tuning stays local-only so we
@@ -447,7 +450,8 @@ function adoptServerProfile(sp){
   if(!sp || !sp.desks) return;
   const enabled = Array.isArray(sp.desks.enabled) ? sp.desks.enabled : null;
   const disabled = enabled ? BUILTIN_ORDER.filter(id=>!enabled.includes(id)) : [];
-  state.profile = { desks:{ disabled, custom: Array.isArray(sp.desks.custom)?sp.desks.custom:[] }, weights: sp.weights||{}, notes: sp.notes||{}, deskOrder: Array.isArray(sp.deskOrder)?sp.deskOrder:[] };
+  state.profile = { desks:{ disabled, custom: Array.isArray(sp.desks.custom)?sp.desks.custom:[] }, weights: sp.weights||{}, notes: sp.notes||{}, deskOrder: Array.isArray(sp.deskOrder)?sp.deskOrder:[],
+    styles: sp.styles||{}, window: sp.window||null };
   saveProfile();
 }
 async function loadServerProfile(){
@@ -470,16 +474,32 @@ function syncDesks(){ // desk set changed → regenerate, then poll until the re
   _dt = setTimeout(()=>{ putProfile(true).then(ok=>{ if(!ok){ state.armNext=false; state.awaitGen=null; } load(false); }); }, 1000);
 }
 let _nt;
+// Shared "content preference changed → rebuild" kickoff (notes, writer styles,
+// freshness window): save, arm the poll on the next fetch's stamp, debounce the
+// regenerate PUT. Signed-in only — anon preferences sync on first sign-in.
+function queueRebuild(ms){
+  saveProfile();
+  clearTimeout(_nt);
+  state.armNext = !!state.auth.signedIn;
+  _nt = setTimeout(()=>{ putProfile(true).then(ok=>{ if(!ok){ state.armNext=false; state.awaitGen=null; } load(false); }); }, ms||1200);
+}
 function setDeskNote(id, txt){ // per-desk reader instruction → rebuild that feed
   if(!id) return;
   state.profile.notes = state.profile.notes || {};
   const v = String(txt||"").replace(/[\r\n]+/g," ").trim().slice(0,280);
   if(v === (state.profile.notes[id]||"")) return; // no change
   if(v) state.profile.notes[id] = v; else delete state.profile.notes[id];
-  saveProfile();
-  clearTimeout(_nt);
-  state.armNext = !!state.auth.signedIn;   // see syncDesks — arm on the next fetch's stamp
-  _nt = setTimeout(()=>{ putProfile(true).then(ok=>{ if(!ok){ state.armNext=false; state.awaitGen=null; } load(false); }); }, 1500);
+  queueRebuild(1500);
+}
+function setDeskStyle(id, v){ // per-desk written register → rebuild
+  if(!id) return;
+  state.profile.styles = state.profile.styles || {};
+  if(v && v!=="colour") state.profile.styles[id] = v; else delete state.profile.styles[id];
+  queueRebuild();
+}
+function setFreshWindow(v){ // global freshness window → rebuild
+  state.profile.window = v || null;
+  queueRebuild();
 }
 
 // ---- data load + background-build polling --------------------------------
@@ -541,6 +561,8 @@ async function poll(){
   try{
     const data = await fetchData(false);
     if(!data.error){
+      const awaited = state.awaitGen != null;
+      const prevKeys = awaited && state.data && state.data.items ? new Set(state.data.items.map(itemKeyClient)) : null;
       const changed = !state.data || String(data.generatedAt||"") !== String(state.data.generatedAt||"")
         || (data.items||[]).length !== ((state.data.items)||[]).length;
       applyData(data);
@@ -551,6 +573,12 @@ async function poll(){
         return;
       }
       state.loading = false; state.awaitGen = null;
+      // The rebuild we were waiting on just landed: say what it delivered.
+      if(awaited && prevKeys){
+        const freshN = (data.items||[]).filter(i=>!prevKeys.has(itemKeyClient(i))).length;
+        state.toast = { msg: freshN ? `${freshN} new ${freshN===1?"story":"stories"} pulled` : "Nothing new — you’re up to date" };
+        clearTimeout(window.__tt); window.__tt = setTimeout(()=>{ state.toast=null; render(); }, 4200);
+      }
     } else { window.__poll = setTimeout(poll, 5000); return; }
   }catch(_){ window.__poll = setTimeout(poll, 5000); return; }
   render();
@@ -899,6 +927,13 @@ function render(){
       </div></div></div>
       <div class="set-row"><span class="set-label">Tuning</span><div class="set-body">
         <div class="hint">Swipe a card right to mark it read, left for not-for-me. Your desks learn and the next pull is tailored to you.</div>
+        <div class="row" style="margin-top:8px;align-items:center;gap:7px">
+          <span class="hint" style="margin:0">Only stories from the last</span>
+          <select class="mini-sel" id="freshwin">
+            ${[["","desk defaults"],["24h","24 hours"],["48h","48 hours"],["1w","week"],["1m","month"]]
+              .map(([v,l])=>`<option value="${v}" ${(state.profile.window||"")===v?"selected":""}>${l}</option>`).join("")}
+          </select>
+        </div>
         <div class="row" style="margin-top:8px"><button class="linkbtn" id="reset-learn">Reset what I’ve learned</button></div>
       </div></div>
       ${state.auth.enabled ? `<div class="set-row"><span class="set-label">Account</span><div class="set-body">
@@ -910,7 +945,9 @@ function render(){
       </div></div>` : ""}
     </div>`;
 
-  const pulled = state.data && state.data.date ? ` · last pulled ${esc(state.data.date)}` : "";
+  const updatedAt = state.data && state.data.generatedAt
+    ? new Date(state.data.generatedAt).toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"}) : null;
+  const pulled = updatedAt ? ` · updated ${esc(updatedAt)}` : (state.data && state.data.date ? ` · last pulled ${esc(state.data.date)}` : "");
   const nNew = newCount();
 
   const onboardHtml = (state.onboard && !state.error) ? `
@@ -943,12 +980,14 @@ function render(){
     <section class="podcast" id="podbar">
       <button class="pod-play" id="podplay" type="button" aria-label="Play today's podcast">▶</button>
       <div class="pod-meta"><div class="pod-title">The latest on The Wire</div><div class="pod-sub" id="podsub">The day's news, talked through</div></div>
+      <a class="icbtn" id="poddl" href="/api/podcast/today?download=1" aria-label="Download today's episode" title="Download for offline"
+         style="display:${window.__podReady?"inline-flex":"none"};margin-left:auto;align-items:center;justify-content:center;text-decoration:none;flex:0 0 auto">⬇</a>
     </section>
     ${(()=>{ let seen=true; try{ seen=!!localStorage.getItem("jackwire:readertip"); }catch(_){};
       const ua=navigator.userAgent, safari=/safari/i.test(ua) && !/chrome|crios|fxios|edg|android/i.test(ua);
       return (seen||!safari)?"":`<div class="rtip" id="rtip"><div>Tip: open a headline, tap <b>aA</b> → <b>Use Reader Automatically</b>. Clean reading — one and done.</div><button class="rtip-x" id="rtip-x" aria-label="Dismiss">✕</button></div>`; })()}
     <main class="feed">${onboardHtml}${feedHtml}</main>
-    <footer class="foot">British English, £, no ads, no comment columns. Your desks, each with its own voice — swipe to tune them. Refreshed through the day, newest at the top.${pulled}</footer>
+    <footer class="foot">British English, £, no ads, no comment columns. Your desks, each with its own voice — swipe to tune them. Editions land ~7am, 1pm and 7pm UK; your favourites float up.${pulled}</footer>
     ${state.toast?`<div class="toast"><span>${esc(state.toast.msg)}</span>${state.toast.undo?`<button id="undo">Undo</button>`:""}</div>`:""}
   `;
   wire();
@@ -988,6 +1027,13 @@ function deskRowHtml(id, builtin){
     </div>
     <textarea class="desk-note" data-note="${esc(id)}" maxlength="280" rows="2"
       placeholder="Message this desk — e.g. ‘I’m a pro, skip the basics’ or ‘no articles from the Sun’">${esc(note)}</textarea>
+    <div class="row" style="margin-top:6px;align-items:center;gap:7px">
+      <span class="hint" style="margin:0">Writer</span>
+      <select class="mini-sel desk-style" data-style="${esc(id)}">
+        ${[["colour","House voice"],["brief","Brief & factual"],["analyst","Analyst"],["punch","Tabloid punch"]]
+          .map(([v,l])=>`<option value="${v}" ${((state.profile.styles||{})[id]||"colour")===v?"selected":""}>${l}</option>`).join("")}
+      </select>
+    </div>
     <div class="desk-lean"><span style="color:${info.accent}">▸ ${esc(lean.head)}</span>${lean.detail?` · ${esc(lean.detail)}`:''}</div>
   </div>`;
 }
@@ -1122,6 +1168,8 @@ function wire(){
   document.querySelectorAll("[data-toggle]").forEach(b=> b.onclick = ()=> toggleBuiltin(b.dataset.toggle));
   document.querySelectorAll("[data-remove]").forEach(b=> b.onclick = ()=> removeCustomDesk(b.dataset.remove));
   document.querySelectorAll(".desk-note").forEach(el=> el.onchange = ()=> setDeskNote(el.getAttribute("data-note"), el.value));
+  document.querySelectorAll(".desk-style").forEach(el=> el.onchange = ()=> setDeskStyle(el.getAttribute("data-style"), el.value));
+  $("freshwin") && ($("freshwin").onchange = ()=> setFreshWindow($("freshwin").value));
   document.querySelectorAll("[data-up]").forEach(b=> b.onclick = ()=> moveDesk(b.dataset.up, -1));
   document.querySelectorAll("[data-down]").forEach(b=> b.onclick = ()=> moveDesk(b.dataset.down, 1));
   document.querySelectorAll(".why-i").forEach(b=> b.onclick = (e)=>{
@@ -1141,6 +1189,9 @@ function wire(){
     // Readiness check on load (status only; the render is warmed on ingest and,
     // failing that, by the audio GET when someone taps play).
     if(!_pod && !_podBusy) podMeta().then(m=>{
+      if(m && m.ready) window.__podReady = true;   // sticky: re-renders keep the ⬇ once the MP3 is cached
+      const dl=document.getElementById("poddl");
+      if(dl && window.__podReady) dl.style.display="inline-flex";
       const s=document.getElementById("podsub"); if(!s||_pod||_podBusy) return;
       s.textContent = (m&&m.ready) ? "Ready · the day's news, talked through" : (m&&m.turns ? "Tap play to listen" : "Built with the next refresh");
     });
