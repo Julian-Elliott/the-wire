@@ -644,6 +644,37 @@ const fmOn = ()=>{ try{ return localStorage.getItem("jackwire:fm")==="1"; }catch
 const fmState = { open:false, tracks:[], status:"idle", segs:[], idx:-1, audio:null, cancel:false,
   line:"Off air. Press GO LIVE and let's get this over with.",
   sass:(()=>{ try{ const n=Number(localStorage.getItem("jackwire:fmsass")); return n>=0&&n<4?n:2; }catch(_){ return 2; } })() };
+let _mk = null;   // MusicKit instance (lazy)
+async function fmConnectAM(){
+  try{
+    fmState.line="Connecting to Apple Music…"; render();
+    if(!window.MusicKit){
+      await new Promise((res,rej)=>{ const sc=document.createElement("script");
+        sc.src="https://js-cdn.music.apple.com/musickit/v3/musickit.js"; sc.onload=res; sc.onerror=rej; document.head.appendChild(sc); });
+    }
+    const r = await fetch("/api/musickit-token"); const d = await r.json();
+    if(!d.token) throw new Error(d.error||"token unavailable");
+    await MusicKit.configure({ developerToken: d.token, app: { name: "The Wire", build: "1" } });
+    _mk = MusicKit.getInstance();
+    await _mk.authorize();   // needs an active Apple Music subscription
+    const pl = await _mk.api.music("v1/me/library/playlists", { limit: 12 });
+    fmState.playlists = ((pl && pl.data && pl.data.data) || []).map(p=>({ id:p.id, name:(p.attributes&&p.attributes.name)||"Playlist" }));
+    fmState.line = fmState.playlists.length ? "Connected. Pick a playlist below." : "Connected, but no playlists found — local files still work.";
+  }catch(e){ fmState.line = "Apple Music didn't connect ("+((e&&e.message)||"authorisation failed")+"). Local files still work."; }
+  render();
+}
+async function fmPickPlaylist(id){
+  if(!id || !_mk) return;
+  try{
+    fmState.line="Reading the playlist…"; render();
+    const tr = await _mk.api.music(`v1/me/library/playlists/${id}/tracks`, { limit: 8 });
+    const items = ((tr && tr.data && tr.data.data) || []).slice(0,8);
+    fmState.tracks = items.map(t=>({ title:(t.attributes&&t.attributes.name)||"Untitled", artist:(t.attributes&&t.attributes.artistName)||"", amId:t.id }));
+    fmState.amPlaylist = id;
+    fmState.line = fmState.tracks.length+" tracks in from Apple Music. Go live.";
+  }catch(_){ fmState.line = "Couldn't read that playlist — try another."; }
+  render();
+}
 function fmSpeak(text){ return new Promise(res=>{
   const sy=window.speechSynthesis;
   if(!sy||!text) return setTimeout(res, Math.min(6000, Math.max(1500,(text||"").length*45)));
@@ -656,6 +687,24 @@ function fmMarkRow(i){ document.querySelectorAll("#fmorder .fm-row").forEach((el
 async function fmPlaySeg(seg){
   if(seg.type==="music"){
     const tr = fmState.tracks[(seg.track||1)-1]; if(!tr) return;
+    if(tr.amId && _mk){   // Apple Music: play via MusicKit's own player
+      try{
+        await _mk.setQueue({ playlist: fmState.amPlaylist, startPosition: (seg.track||1)-1 });
+        _mk.volume = seg.intro?0.15:0.9;
+        _mk.play();
+        if(seg.intro){ fmSetLine("ON AIR", seg.intro); await fmSpeak(seg.intro); if(fmState.cancel){ try{_mk.stop();}catch(_){} return; } }
+        fmSetLine("NOW PLAYING", tr.title + (tr.artist? " — "+tr.artist : ""));
+        const ramp=setInterval(()=>{ try{ _mk.volume=Math.min(0.95,(_mk.volume||0)+0.12); if(_mk.volume>=0.95) clearInterval(ramp); }catch(_){ clearInterval(ramp); } },100);
+        await new Promise(res=>{ const poll=setInterval(()=>{
+          if(fmState.cancel){ try{_mk.stop();}catch(_){} clearInterval(poll); res(); return; }
+          const dur=_mk.currentPlaybackDuration||0, cur=_mk.currentPlaybackTime||0;
+          if(dur>0 && cur>=dur-0.7){ try{_mk.pause();}catch(_){} clearInterval(poll); res(); }   // pause before auto-advance steals the next track
+        },300); });
+        clearInterval(ramp);
+        if(!fmState.cancel && seg.outro){ fmSetLine("BACK-ANNOUNCE", seg.outro); await fmSpeak(seg.outro); }
+      }catch(_){ fmSetLine("ON AIR", "Apple Music refused that one. Typical. Moving on."); await fmSpeak("Apple Music refused that one. Typical. Moving on."); }
+      return;
+    }
     const a = new Audio(tr.url); fmState.audio=a; a.volume = seg.intro?0.15:0.9;
     a.play().catch(()=>{});
     if(seg.intro){ fmSetLine("ON AIR", seg.intro); await fmSpeak(seg.intro); if(fmState.cancel){ a.pause(); return; } }
@@ -696,7 +745,10 @@ async function fmGoLive(){
       body: JSON.stringify({ tracks: fmState.tracks.map(t=>t.title), sass: FM_SASS[fmState.sass].id }) });
     const d = await r.json();
     if(d && Array.isArray(d.segments) && d.segments.length) segs=d.segments;
-  }catch(_){}
+    else if(d && d.error){ state.toast={msg:d.error+" — running the demo show instead."};
+      clearTimeout(window.__tt); window.__tt=setTimeout(()=>{state.toast=null;render();},6000); }
+  }catch(_){ state.toast={msg:"Couldn't reach the newsroom — running the demo show instead."};
+    clearTimeout(window.__tt); window.__tt=setTimeout(()=>{state.toast=null;render();},6000); }
   if(fmState.cancel) return;
   if(!segs) segs = fmFallback();   // signed-out / throttled / offline → canned show, still funny
   fmState.segs=segs; fmState.status="live"; render();
@@ -705,6 +757,7 @@ async function fmGoLive(){
 function fmStop(){
   fmState.cancel=true;
   if(window.speechSynthesis) speechSynthesis.cancel();
+  if(_mk){ try{ _mk.stop(); }catch(_){} }
   if(fmState.audio){ try{ fmState.audio.pause(); }catch(_){} fmState.audio=null; }
   fmState.status="stopped"; fmState.idx=-1; fmState.line="Off air. Enjoy the silence while it lasts."; render();
 }
@@ -1135,7 +1188,8 @@ function render(){
       </div></div>
       <div class="set-row"><span class="set-label">Tracks</span><div class="set-body">
         ${fmState.tracks.map((t,i)=>`<div class="row" style="justify-content:space-between;margin-top:4px"><span style="font-size:13px">${esc(t.title)}</span><button class="desk-rm" data-fmrm="${i}">✕</button></div>`).join("")||`<div class="set-empty">Add a few audio files — they never leave your device.</div>`}
-        <div class="row" style="margin-top:8px"><button class="linkbtn" id="fmadd">＋ Add tracks</button><input id="fmfiles" type="file" accept="audio/*" multiple style="display:none"></div>
+        <div class="row" style="margin-top:8px"><button class="linkbtn" id="fmadd">＋ Add files</button><button class="linkbtn" id="fmam">${fmState.playlists?"↻ Reconnect Apple Music":" Connect Apple Music"}</button><input id="fmfiles" type="file" accept="audio/*" multiple style="display:none"></div>
+        ${fmState.playlists && fmState.playlists.length ? `<div class="row" style="margin-top:8px;align-items:center;gap:7px"><span class="hint" style="margin:0">Playlist</span><select class="mini-sel" id="fmpl"><option value="">choose…</option>${fmState.playlists.map(p=>`<option value="${esc(p.id)}" ${fmState.amPlaylist===p.id?"selected":""}>${esc(p.name)}</option>`).join("")}</select></div>`:""}
       </div></div>
       <div class="set-row"><span class="set-label">Attitude</span><div class="set-body"><div class="chips">
         ${FM_SASS.map((sx,i)=>`<button class="chip ${i===fmState.sass?"":"off"}" data-fmsass="${i}">${i===fmState.sass?"✓ ":""}${sx.label}</button>`).join("")}
@@ -1422,6 +1476,8 @@ function wire(){
   });
   document.querySelectorAll("[data-fmrm]").forEach(b=> b.onclick=()=>{ const i=Number(b.dataset.fmrm); const t=fmState.tracks[i]; if(t&&t.url) URL.revokeObjectURL(t.url); fmState.tracks.splice(i,1); render(); });
   document.querySelectorAll("[data-fmsass]").forEach(b=> b.onclick=()=>{ fmState.sass=Number(b.dataset.fmsass); try{ localStorage.setItem("jackwire:fmsass", String(fmState.sass)); }catch(_){} render(); });
+  $("fmam") && ($("fmam").onclick = fmConnectAM);
+  $("fmpl") && ($("fmpl").onchange = ()=> fmPickPlaylist($("fmpl").value));
   $("fmgo") && ($("fmgo").onclick = fmGoLive);
   $("fmstop") && ($("fmstop").onclick = fmStop);
 
