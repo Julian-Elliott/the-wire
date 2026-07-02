@@ -36,7 +36,7 @@ jobs:
           node-version: "20"
 
       - name: Install dependencies
-        run: npm install
+        run: npm ci
 
       # Strip any stray whitespace/newlines that may have been pasted into the
       # secret — wrangler sends the token verbatim as a Bearer header, and a

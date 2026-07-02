@@ -124,11 +124,12 @@ a{ color:inherit; text-decoration:none; }
 .desk-move{ background:transparent; border:0; color:var(--faint); cursor:pointer; font-size:10px; line-height:1.1; padding:5px 8px; }
 .desk-move:hover{ color:var(--amber); }
 .desk-voice{ color:var(--muted); font-size:12.5px; margin-top:6px; line-height:1.45; }
-.desk-note{ width:100%; margin-top:7px; box-sizing:border-box; resize:vertical; min-height:38px; background:var(--bg); color:var(--text); border:1px solid var(--line); border-radius:8px; padding:7px 9px; font-family:inherit; font-size:12.5px; line-height:1.4; }
+.desk-note{ width:100%; margin-top:7px; box-sizing:border-box; resize:vertical; min-height:38px; background:var(--ink); color:var(--text); border:1px solid var(--line); border-radius:8px; padding:7px 9px; font-family:inherit; font-size:12.5px; line-height:1.4; }
 .desk-note:focus{ outline:none; border-color:var(--amber); }
 .desk-note::placeholder{ color:var(--faint); }
 .desk-lean{ font-family:'JetBrains Mono',monospace; font-size:10.5px; color:var(--muted); margin-top:7px; }
 .mini-sel{ background:var(--panel); border:1px solid var(--line); color:var(--text); border-radius:7px; padding:4px 8px; font-size:11.5px; font-family:'Inter',sans-serif; }
+.fm-on{ color:var(--amber) !important; font-weight:600; }
 
 .hero{ max-width:760px; margin:0 auto; padding:26px 20px 8px; }
 .hello{ font-family:'Bricolage Grotesque',sans-serif; font-weight:700; font-size:30px; margin:0 0 6px; letter-spacing:-.015em; }
@@ -142,7 +143,11 @@ a{ color:inherit; text-decoration:none; }
 .fil[draggable="true"]{ cursor:grab; }
 .fil.dragging{ opacity:.45; }
 .fil.drop-target{ outline:2px dashed var(--amber); outline-offset:1px; }
-.podcast{ max-width:760px; margin:14px auto 0; padding:11px 15px; display:flex; align-items:center; gap:13px; border:1px solid var(--line); border-radius:14px; background:linear-gradient(180deg, color-mix(in srgb, var(--amber) 9%, var(--panel)), var(--panel)); }
+.podcast{ max-width:760px; margin:14px auto 0; padding:11px 15px; display:flex; flex-direction:column; align-items:stretch; border:1px solid var(--line); border-radius:14px; background:linear-gradient(180deg, color-mix(in srgb, var(--amber) 9%, var(--panel)), var(--panel)); }
+.pod-main{ display:flex; align-items:center; gap:13px; }
+.pod-prog{ display:flex; align-items:center; gap:8px; margin-top:9px; }
+.pod-time{ font-family:'JetBrains Mono',monospace; font-size:10.5px; color:var(--muted); min-width:34px; text-align:center; }
+#podseek{ flex:1; accent-color:var(--amber); height:4px; }
 .pod-play{ flex:0 0 auto; width:42px; height:42px; border-radius:50%; border:none; background:var(--amber); color:#1a1206; font-size:15px; cursor:pointer; display:flex; align-items:center; justify-content:center; }
 .pod-play.loading{ opacity:.65; }
 .pod-meta{ min-width:0; }
@@ -193,7 +198,7 @@ a{ color:inherit; text-decoration:none; }
 .card-meta{ margin-left:auto; display:inline-flex; align-items:center; gap:8px; min-width:0; }
 .card-src{ max-width:34vw; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .card-body{ display:flex; gap:12px; align-items:flex-start; }
-.thumb{ width:76px; height:76px; border-radius:9px; object-fit:cover; flex:0 0 auto; background:var(--panel2); border:1px solid var(--line); }
+.thumb{ -webkit-user-drag:none; width:76px; height:76px; border-radius:9px; object-fit:cover; flex:0 0 auto; background:var(--panel2); border:1px solid var(--line); }
 .card-body.noimg .thumb{ display:none; }
 .card-txt{ min-width:0; }
 .listen:hover, .listen.playing{ color:var(--amber); border-color:var(--amber); }
@@ -286,6 +291,8 @@ const domainOf = u => { try { return new URL(String(u)).hostname.replace(/^www\.
 const relAge = iso => { const m=(Date.now()-Date.parse(iso))/60000; if(!isFinite(m)||m<0) return "";
   if(m<60) return Math.max(1,Math.round(m))+"m ago"; const h=m/60; if(h<24) return Math.round(h)+"h ago"; return Math.round(h/24)+"d ago"; };
 const longDate = () => new Date().toLocaleDateString("en-GB",{weekday:"long",day:"numeric",month:"long",year:"numeric"});
+const fmtT = s => { s=Math.max(0,Math.floor(s||0)); return Math.floor(s/60)+":"+String(s%60).padStart(2,"0"); };
+window.__podRate = (()=>{ try{ return Number(localStorage.getItem("jackwire:podrate"))||1; }catch(_){ return 1; } })();
 function londonHour(){ try{ return parseInt(new Intl.DateTimeFormat("en-GB",{timeZone:"Europe/London",hour:"2-digit",hour12:false}).format(new Date()),10)%24; }catch(_){ return new Date().getHours(); } }
 const greeting = () => { const h=londonHour(); return h<12?"Good morning":h<18?"Good afternoon":"Good evening"; };
 const isNew = it => !!(it.addedAt && state.seenBefore && String(it.addedAt) > String(state.seenBefore));
@@ -533,6 +540,7 @@ function setFreshWindow(v){ // global freshness window → rebuild
   queueRebuild();
 }
 function setShowStyle(v){ // podcast show style → next episode is produced in it
+  if((state.profile.show||"briefing") === (v||"briefing")) return;   // no-op tap: don't burn a rebuild
   state.profile.show = (v && v!=="briefing") ? v : null;
   queueRebuild();
   render();   // move the ✓ immediately
@@ -623,6 +631,80 @@ async function poll(){
     } else { window.__poll = setTimeout(poll, 5000); return; }
   }catch(_){ window.__poll = setTimeout(poll, 5000); return; }
   render();
+}
+
+// ---- Wire FM (#34): after-hours funny radio mode — toggle in ⚙, OFF by default
+const FM_SASS = [
+  { id:"smooth", label:"Smooth" }, { id:"cheeky", label:"Cheeky" },
+  { id:"savage", label:"Savage" }, { id:"unhinged", label:"Unhinged" },
+];
+const fmOn = ()=>{ try{ return localStorage.getItem("jackwire:fm")==="1"; }catch(_){ return false; } };
+const fmState = { open:false, tracks:[], status:"idle", segs:[], idx:-1, audio:null, cancel:false,
+  line:"Off air. Press GO LIVE and let's get this over with.",
+  sass:(()=>{ try{ const n=Number(localStorage.getItem("jackwire:fmsass")); return n>=0&&n<4?n:2; }catch(_){ return 2; } })() };
+function fmSpeak(text){ return new Promise(res=>{
+  const sy=window.speechSynthesis;
+  if(!sy||!text) return setTimeout(res, Math.min(6000, Math.max(1500,(text||"").length*45)));
+  const u=new SpeechSynthesisUtterance(text);
+  const vs=sy.getVoices(); u.voice=vs.find(v=>/en-GB/i.test(v.lang))||vs.find(v=>v.lang&&v.lang.startsWith("en"))||null;
+  u.rate=1.05; u.onend=res; u.onerror=res; sy.speak(u);
+}); }
+function fmSetLine(type,text){ fmState.line=text||""; const l=document.getElementById("fmline"); if(l) l.textContent=fmState.line; const ty=document.getElementById("fmtype"); if(ty) ty.textContent=type; }
+function fmMarkRow(i){ document.querySelectorAll("#fmorder .fm-row").forEach((el,j)=> el.classList.toggle("fm-on", j===i)); }
+async function fmPlaySeg(seg){
+  if(seg.type==="music"){
+    const tr = fmState.tracks[(seg.track||1)-1]; if(!tr) return;
+    const a = new Audio(tr.url); fmState.audio=a; a.volume = seg.intro?0.15:0.9;
+    a.play().catch(()=>{});
+    if(seg.intro){ fmSetLine("ON AIR", seg.intro); await fmSpeak(seg.intro); if(fmState.cancel){ a.pause(); return; } }
+    fmSetLine("NOW PLAYING", tr.title);
+    const ramp=setInterval(()=>{ a.volume=Math.min(0.95,a.volume+0.12); if(a.volume>=0.95) clearInterval(ramp); },100);
+    await new Promise(res=>{ a.onended=res; a.onerror=res;
+      const poll=setInterval(()=>{ if(fmState.cancel||a.ended){ try{ if(fmState.cancel) a.pause(); }catch(_){} clearInterval(poll); res(); } },200); });
+    clearInterval(ramp); fmState.audio=null;
+    if(!fmState.cancel && seg.outro){ fmSetLine("BACK-ANNOUNCE", seg.outro); await fmSpeak(seg.outro); }
+  } else {
+    fmSetLine(seg.type==="news"?"NEWS DESK":"ON AIR", seg.text);
+    await fmSpeak(seg.text);
+  }
+}
+async function fmRun(){
+  for(let i=0;i<fmState.segs.length;i++){
+    if(fmState.cancel) break;
+    fmState.idx=i; fmMarkRow(i);
+    await fmPlaySeg(fmState.segs[i]);
+  }
+  if(!fmState.cancel){ fmState.status="stopped"; fmState.idx=-1; fmState.line="That's the loop. Miss me already? Go live again."; render(); }
+}
+function fmFallback(){
+  const segs=[{type:"talk",text:"You're locked into Wire FM. The newsroom is not answering, which is very on brand for the newsroom. Your music though, that's real. Brave. Let's hear it."}];
+  fmState.tracks.slice(0,6).forEach((t,i)=>segs.push({type:"music",track:i+1,
+    intro:i===0?`Easing in with ${t.title}. Bold choice. We'll see how this goes.`:`Next up: ${t.title}. Your funeral.`,
+    outro:`That was ${t.title}. Still here? Impressive stamina.`}));
+  return segs;
+}
+async function fmGoLive(){
+  if(!fmState.tracks.length){ fmState.line="Add a track or two first. I'm not doing this a cappella."; render(); return; }
+  fmState.cancel=false; fmState.err=null; fmState.status="loading";
+  fmState.line="Judging your playlist and shaking down the newsroom…"; render();
+  cancelPodWait(); if(_pod){ try{ _pod.pause(); }catch(_){} } if(_audio){ try{ _audio.pause(); }catch(_){} }
+  let segs=null;
+  try{
+    const r = await fetch("/api/dj", { method:"POST", headers:{"content-type":"application/json"},
+      body: JSON.stringify({ tracks: fmState.tracks.map(t=>t.title), sass: FM_SASS[fmState.sass].id }) });
+    const d = await r.json();
+    if(d && Array.isArray(d.segments) && d.segments.length) segs=d.segments;
+  }catch(_){}
+  if(fmState.cancel) return;
+  if(!segs) segs = fmFallback();   // signed-out / throttled / offline → canned show, still funny
+  fmState.segs=segs; fmState.status="live"; render();
+  fmRun();
+}
+function fmStop(){
+  fmState.cancel=true;
+  if(window.speechSynthesis) speechSynthesis.cancel();
+  if(fmState.audio){ try{ fmState.audio.pause(); }catch(_){} fmState.audio=null; }
+  fmState.status="stopped"; fmState.idx=-1; fmState.line="Off air. Enjoy the silence while it lasts."; render();
 }
 
 // ---- swipe actions -------------------------------------------------------
@@ -937,7 +1019,7 @@ function render(){
           </span>
         </div>
         ${it.img?`<div class="card-body">
-          <img class="thumb" src="/api/img/${esc(it.img)}" alt="" loading="lazy" onerror="this.closest('.card-body').classList.add('noimg')">
+          <img class="thumb" src="/api/img/${esc(it.img)}" alt="" loading="lazy" draggable="false" onerror="this.closest('.card-body').classList.add('noimg')">
           <div class="card-txt"><h3 class="h">${titleHtml}</h3>${it.summary?`<p class="p">${esc(it.summary)}</p>`:""}</div>
         </div>`:`<h3 class="h">${titleHtml}</h3>
         ${it.summary?`<p class="p">${esc(it.summary)}</p>`:""}`}
@@ -1006,6 +1088,10 @@ function render(){
         </div>
         <div class="row" style="margin-top:8px"><button class="linkbtn" id="reset-learn">Reset what I’ve learned</button></div>
       </div></div>
+      <div class="set-row"><span class="set-label">Wire FM</span><div class="set-body">
+        <div class="hint">An after-hours radio mode: your own tracks, today's real headlines, an AI host with attitude. Experimental — off by default.</div>
+        <div class="row" style="margin-top:8px"><button class="linkbtn" id="fmtoggle">${fmOn()?"Turn off":"Turn on"}</button></div>
+      </div></div>
       ${state.auth.enabled ? `<div class="set-row"><span class="set-label">Account</span><div class="set-body">
         ${state.auth.signedIn
           ? `<div class="hint">Signed in${state.auth.email?` as ${esc(state.auth.email)}`:""}. Your desks and learning sync across your devices.</div>
@@ -1034,20 +1120,49 @@ function render(){
       <div class="card-foot"><span class="type">Swipe this card away to begin</span></div>
     </article>` : "";
 
+  // Preserve a focused desk-note / add-desk draft across this innerHTML swap
+  // (delayed renders — toasts, polls — were wiping half-typed text).
+  const _ae = document.activeElement;
+  const _keep = _ae && (_ae.classList && _ae.classList.contains("desk-note") ? { note:_ae.getAttribute("data-note"), v:_ae.value, s:_ae.selectionStart, e:_ae.selectionEnd }
+    : (_ae && (_ae.id==="d-label"||_ae.id==="d-topic") ? { id:_ae.id, v:_ae.value, s:_ae.selectionStart, e:_ae.selectionEnd } : null));
+  const fmHtml = (fmOn() && fmState.open) ? `
+    <div class="settings" id="fmpanel">
+      <div class="set-row"><span class="set-label" style="color:${fmState.status==="live"?"var(--red)":"var(--muted)"}">${fmState.status==="live"?"● ON AIR":"WIRE FM"}</span><div class="set-body">
+        <div class="hint" id="fmtype" style="letter-spacing:.14em;text-transform:uppercase;font-family:'JetBrains Mono',monospace">${fmState.status==="live"?"ON AIR":"STANDBY"}</div>
+        <p id="fmline" style="margin:6px 0 0;font-size:14.5px;line-height:1.5">${esc(fmState.line)}</p>
+      </div></div>
+      <div class="set-row"><span class="set-label">Tracks</span><div class="set-body">
+        ${fmState.tracks.map((t,i)=>`<div class="row" style="justify-content:space-between;margin-top:4px"><span style="font-size:13px">${esc(t.title)}</span><button class="desk-rm" data-fmrm="${i}">✕</button></div>`).join("")||`<div class="set-empty">Add a few audio files — they never leave your device.</div>`}
+        <div class="row" style="margin-top:8px"><button class="linkbtn" id="fmadd">＋ Add tracks</button><input id="fmfiles" type="file" accept="audio/*" multiple style="display:none"></div>
+      </div></div>
+      <div class="set-row"><span class="set-label">Attitude</span><div class="set-body"><div class="chips">
+        ${FM_SASS.map((sx,i)=>`<button class="chip ${i===fmState.sass?"":"off"}" data-fmsass="${i}">${i===fmState.sass?"✓ ":""}${sx.label}</button>`).join("")}
+      </div></div></div>
+      ${fmState.segs.length?`<div class="set-row"><span class="set-label">Running order</span><div class="set-body" id="fmorder">
+        ${fmState.segs.map((sg,i)=>`<div class="hint fm-row${i===fmState.idx?" fm-on":""}" style="margin-top:3px">${sg.type==="music"?"♪":sg.type==="news"?"◆":"❯"} ${esc(sg.type==="music"?((fmState.tracks[(sg.track||1)-1]||{}).title||"track"):(sg.text||"").slice(0,70))}</div>`).join("")}
+      </div></div>`:""}
+      <div class="set-row"><span class="set-label"></span><div class="set-body">
+        ${fmState.status==="live"?`<button class="refresh" id="fmstop" style="background:var(--down);color:#fff">■ Stop</button>`
+          :`<button class="refresh" id="fmgo" ${fmState.status==="loading"?"disabled":""}>${fmState.status==="loading"?"Tuning in…":"▶ Go live"}</button>`}
+        <div class="hint" style="margin-top:7px">Your files + today's real headlines, hosted by an AI with attitude. The voice is your browser's TTS — deadpan is the joke.</div>
+      </div></div>
+    </div>` : "";
   app.innerHTML = `
     <header class="mast">
       <div class="mast-l"><div class="eyebrow">${state.auth.name?esc(state.auth.name.split(" ")[0]+"’s edition · UK"):"Personal edition · UK"}</div><h1 class="title">THE WIRE</h1></div>
       <div class="mast-r"><div class="date">${longDate()}</div>
         <div class="mast-btns">
           <button class="icbtn" id="theme" aria-label="Toggle dark/light">${curTheme()==="dark"?"☀":"☾"}</button>
+          ${fmOn()?`<button class="icbtn" id="fmbtn" aria-label="Wire FM">📻</button>`:""}
           <button class="icbtn" id="cog" aria-label="Settings">⚙</button>
           <button class="refresh" id="refresh" ${(state.loading||refreshLockMsLeft()>0)?"disabled":""}>${state.awaitGen!=null?"Refreshing…":(refreshLockMsLeft()>0?`Fresh · ${Math.ceil(refreshLockMsLeft()/60000)}m`:(state.loading?"Pulling…":"Refresh"))}</button>
         </div></div>
     </header>
-    ${settingsHtml}
+    ${settingsHtml}${fmHtml}
     ${(sumLine || nNew) ? `<section class="hero"><p class="sum">${esc(sumLine)}${nNew?`${sumLine?" · ":""}<span style="color:var(--amber)">${nNew} new</span>`:""}</p></section>` : ""}
     <nav class="filters"><div class="filters-inner">${filterBtns}</div></nav>
     <section class="podcast" id="podbar">
+      <div class="pod-main">
       <button class="pod-play" id="podplay" type="button" aria-label="Play today's podcast">▶</button>
       <div class="pod-meta"><div class="pod-title">The latest on The Wire</div><div class="pod-sub" id="podsub">The day's news, talked through</div></div>
       <span style="margin-left:auto;display:inline-flex;gap:8px;align-items:center;flex:0 0 auto">
@@ -1056,6 +1171,13 @@ function render(){
         <a class="icbtn" id="poddl" href="/api/podcast/today?download=1" aria-label="Download today's episode" title="Download for offline"
            style="display:${window.__podReady?"inline-flex":"none"};align-items:center;justify-content:center;text-decoration:none">⬇</a>
       </span>
+      </div>
+      <div class="pod-prog" id="podprog" style="display:none">
+        <span class="pod-time" id="podcur">0:00</span>
+        <input type="range" id="podseek" min="0" max="1000" value="0" step="1" aria-label="Seek">
+        <span class="pod-time" id="poddur">–:––</span>
+        <button class="icbtn" id="podrate" type="button" aria-label="Playback speed" style="width:auto;padding:0 9px;font-size:11px">${(window.__podRate||1)}×</button>
+      </div>
     </section>
     ${(()=>{ let seen=true; try{ seen=!!localStorage.getItem("jackwire:readertip"); }catch(_){};
       const ua=navigator.userAgent, safari=/safari/i.test(ua) && !/chrome|crios|fxios|edg|android/i.test(ua);
@@ -1065,6 +1187,10 @@ function render(){
     ${state.toast?`<div class="toast"><span>${esc(state.toast.msg)}</span>${state.toast.undo?`<button id="undo">Undo</button>`:""}</div>`:""}
   `;
   wire();
+  if(_keep){
+    const el = _keep.note!=null ? document.querySelector(`.desk-note[data-note="${_keep.note}"]`) : document.getElementById(_keep.id);
+    if(el){ el.value=_keep.v; try{ el.focus(); el.setSelectionRange(_keep.s,_keep.e); }catch(_){} }
+  }
 }
 
 function deskReport(report){
@@ -1113,7 +1239,7 @@ function deskRowHtml(id){
 let _audio=null, _audioId=null;
 function syncListenUI(){
   document.querySelectorAll(".listen").forEach(b=>{
-    const id=b.getAttribute("data-listen"); const active=_audio&&_audioId===id;
+    const id=b.getAttribute("data-listen") || (b.dataset.preview ? "preview:"+b.dataset.preview : null); const active=_audio&&_audioId===id;
     const playing=!!(active&&!_audio.paused&&!_audio.ended);
     const loading=!!(active&&!_audio.paused&&_audio.readyState<3&&!_audio.ended);
     b.classList.toggle("playing",playing); b.classList.toggle("loading",loading);
@@ -1125,6 +1251,7 @@ function playPreview(id){
   const pid = "preview:"+id;
   if(_audio && _audioId===pid){ _audio.paused ? _audio.play() : _audio.pause(); syncListenUI(); return; }
   if(_audio){ try{ _audio.pause(); }catch(_){} }
+  cancelPodWait();
   if(_pod && !_pod.paused){ try{ _pod.pause(); }catch(_){} syncPod(); }
   _audio = new Audio(`/api/style-preview?s=${encodeURIComponent(id)}`);
   _audioId = pid;
@@ -1136,9 +1263,11 @@ function playPreview(id){
   _audio.play().catch(()=> syncListenUI());
   syncListenUI();
 }
+function cancelPodWait(){ if(_podBusy){ _podGen++; _podBusy=false; _pod=null; _podQ=[]; syncPod(); } }
 function toggleListen(id){
   if(_audio && _audioId===id){ _audio.paused ? _audio.play() : _audio.pause(); syncListenUI(); return; }
   if(_audio){ try{ _audio.pause(); }catch(_){} }
+  cancelPodWait();   // a pending cold render must not barge in over this a minute later
   if(_pod && !_pod.paused){ try{ _pod.pause(); }catch(_){} syncPod(); }   // one player at a time
   _audio = new Audio(`/api/listen/${encodeURIComponent(id)}?u=${encodeURIComponent(state.uid)}`);
   _audioId = id;
@@ -1169,13 +1298,42 @@ function syncPod(){
   b.textContent = loading ? "…" : (playing ? "⏸" : "▶");
 }
 function podPlayNext(){
-  if(_podI >= _podQ.length){ _pod=null; const s=document.getElementById("podsub"); if(s) s.textContent="The day's news, talked through"; syncPod(); return; }
+  if(_podI >= _podQ.length){ _pod=null; const s=document.getElementById("podsub"); if(s) s.textContent="The day's news, talked through"; const pr=document.getElementById("podprog"); if(pr) pr.style.display="none"; syncPod(); return; }
   if(_audio && !_audio.paused){ try{ _audio.pause(); }catch(_){} syncListenUI(); }   // one player at a time
   const track=_podQ[_podI];
   _podBusy=false;
   _pod=new Audio(track.url);
   ["playing","pause","waiting","canplay"].forEach(ev=> _pod.addEventListener(ev, syncPod));
   _pod.addEventListener("playing", ()=>{ const s=document.getElementById("podsub"); if(s && track.sub) s.textContent=track.sub; });
+  if(!track.optional){
+    // ── proper player: rate, resume, scrubber, lock-screen controls (#33) ──
+    _pod.playbackRate = window.__podRate || 1;
+    _pod.addEventListener("loadedmetadata", ()=>{
+      const d=document.getElementById("poddur"); if(d && isFinite(_pod.duration)) d.textContent=fmtT(_pod.duration);
+      try{ const sv=JSON.parse(localStorage.getItem("jackwire:podpos")||"null");
+        if(sv && track.key && sv.key===track.key && sv.t>20 && _pod.duration-sv.t>20) _pod.currentTime=sv.t; }catch(_){}
+    });
+    _pod.addEventListener("timeupdate", ()=>{
+      const p=document.getElementById("podprog"); if(p && p.style.display==="none") p.style.display="flex";
+      const c=document.getElementById("podcur"), sk=document.getElementById("podseek"), d=document.getElementById("poddur");
+      if(c) c.textContent=fmtT(_pod.currentTime);
+      if(d && isFinite(_pod.duration)) d.textContent=fmtT(_pod.duration);
+      if(sk && isFinite(_pod.duration) && !window.__podScrub) sk.value=String(Math.round(1000*_pod.currentTime/_pod.duration));
+      const sec=Math.floor(_pod.currentTime);
+      if(track.key && sec!==window.__podSaved){ window.__podSaved=sec; try{ localStorage.setItem("jackwire:podpos", JSON.stringify({key:track.key,t:sec})); }catch(_){} }
+      try{ if(navigator.mediaSession && isFinite(_pod.duration)) navigator.mediaSession.setPositionState({duration:_pod.duration, playbackRate:_pod.playbackRate, position:Math.min(_pod.currentTime,_pod.duration)}); }catch(_){}
+    });
+    _pod.addEventListener("playing", ()=>{
+      try{ if("mediaSession" in navigator){
+        navigator.mediaSession.metadata = new MediaMetadata({ title:`The Wire — ${track.date||"today's"} edition`, artist:"The Wire", artwork:[{src:"/icon-512.png",sizes:"512x512",type:"image/png"}] });
+        navigator.mediaSession.setActionHandler("play", ()=>{ if(_pod) _pod.play().catch(()=>{}); });
+        navigator.mediaSession.setActionHandler("pause", ()=>{ if(_pod) _pod.pause(); });
+        navigator.mediaSession.setActionHandler("seekbackward", ()=>{ if(_pod) _pod.currentTime=Math.max(0,_pod.currentTime-15); });
+        navigator.mediaSession.setActionHandler("seekforward", ()=>{ if(_pod) _pod.currentTime=Math.min(_pod.duration||1e9,_pod.currentTime+15); });
+        navigator.mediaSession.setActionHandler("seekto", dd=>{ if(_pod && dd && typeof dd.seekTime==="number") _pod.currentTime=dd.seekTime; });
+      } }catch(_){}
+    });
+  }
   _pod.addEventListener("ended", ()=>{ _podI++; podPlayNext(); });
   _pod.addEventListener("error", ()=>{
     // Intro/outro are optional flourishes: if a beat fails, skip straight on.
@@ -1221,7 +1379,7 @@ async function podToggle(){
   if(!m.ready && sub) sub.textContent="Generating today's episode… (up to a minute)";
   _podQ=[
     { url:"/api/beat?k=intro", optional:true },
-    { url:"/api/podcast/today", optional:false, sub:"The day's news, talked through" },
+    { url:"/api/podcast/today", optional:false, sub:"The day's news, talked through", key:(m&&m.key)||null, date:(m&&m.date)||null },
     { url:"/api/beat?k=outro", optional:true },
   ];
   _podI=0; _podBusy=false; podPlayNext();
@@ -1233,7 +1391,7 @@ function wire(){
   $("theme") && ($("theme").onclick = toggleTheme);
   $("cog") && ($("cog").onclick = ()=>{ state.showSettings=!state.showSettings; if(!state.showSettings) state.showAddDesk=false; render(); });
   $("refresh") && ($("refresh").onclick = ()=>{ if(refreshLockMsLeft()>0) return; load(true); });
-  $("retry") && ($("retry").onclick = ()=> load(true));
+  $("retry") && ($("retry").onclick = ()=> load(false));   // reload the cached feed — an error retry must not burn a routine run
   // While the refresh lock is active, re-render once it expires so the button
   // flips back to "Refresh" (no per-second tick — the label is static).
   clearTimeout(window.__rlt);
@@ -1244,6 +1402,23 @@ function wire(){
   $("d-add") && ($("d-add").onclick = ()=> addCustomDesk(($("d-label")||{}).value, ($("d-topic")||{}).value, ""));
   $("reset-learn") && ($("reset-learn").onclick = ()=>{ state.profile.weights={}; saveProfile(); putProfile(false); state.toast={msg:"Cleared learned preferences"}; clearTimeout(window.__tt); window.__tt=setTimeout(()=>{state.toast=null;render();},3000); render(); });
   $("signout") && ($("signout").onclick = ()=>{ location.href="/auth/apple/logout"; });
+  $("fmbtn") && ($("fmbtn").onclick = ()=>{ fmState.open=!fmState.open; render(); });
+  $("fmtoggle") && ($("fmtoggle").onclick = ()=>{
+    const next = fmOn()?"0":"1";
+    try{ localStorage.setItem("jackwire:fm", next); }catch(_){}
+    if(next==="0"){ fmStop(); fmState.open=false; }
+    render();
+  });
+  $("fmadd") && ($("fmadd").onclick = ()=>{ const f=$("fmfiles"); f&&f.click(); });
+  $("fmfiles") && ($("fmfiles").onchange = (e)=>{
+    Array.from(e.target.files||[]).filter(f=>f.type.startsWith("audio/")).forEach(f=>
+      fmState.tracks.push({ title: f.name.replace(/\.[^.]+$/,"").replace(/[_-]+/g," ").trim()||"Untitled", url: URL.createObjectURL(f) }));
+    e.target.value=""; render();
+  });
+  document.querySelectorAll("[data-fmrm]").forEach(b=> b.onclick=()=>{ const i=Number(b.dataset.fmrm); const t=fmState.tracks[i]; if(t&&t.url) URL.revokeObjectURL(t.url); fmState.tracks.splice(i,1); render(); });
+  document.querySelectorAll("[data-fmsass]").forEach(b=> b.onclick=()=>{ fmState.sass=Number(b.dataset.fmsass); try{ localStorage.setItem("jackwire:fmsass", String(fmState.sass)); }catch(_){} render(); });
+  $("fmgo") && ($("fmgo").onclick = fmGoLive);
+  $("fmstop") && ($("fmstop").onclick = fmStop);
 
   document.querySelectorAll("[data-filter]").forEach(b=> b.onclick = ()=>{ state.filter=b.dataset.filter; render(); });
   // Drag-to-reorder filter pills (desktop; touch uses the ▲▼ in Settings).
@@ -1276,6 +1451,16 @@ function wire(){
   const rtipX=document.getElementById("rtip-x");
   if(rtipX) rtipX.onclick=()=>{ try{ localStorage.setItem("jackwire:readertip","1"); }catch(_){} const t=document.getElementById("rtip"); if(t) t.remove(); };
   $("podback") && ($("podback").onclick = ()=>{ if(_pod){ try{ _pod.currentTime = Math.max(0, _pod.currentTime - 15); }catch(_){} } });
+  const psk=$("podseek");
+  if(psk){
+    psk.oninput = ()=>{ window.__podScrub = true; };
+    psk.onchange = ()=>{ window.__podScrub = false; if(_pod && isFinite(_pod.duration)) _pod.currentTime = (Number(psk.value)/1000)*_pod.duration; };
+  }
+  $("podrate") && ($("podrate").onclick = ()=>{
+    const rates=[1,1.25,1.5], nx=rates[(rates.indexOf(window.__podRate||1)+1)%rates.length];
+    window.__podRate=nx; try{ localStorage.setItem("jackwire:podrate", String(nx)); }catch(_){}
+    if(_pod) _pod.playbackRate=nx; const b=$("podrate"); if(b) b.textContent=nx+"×";
+  });
   $("podrestart") && ($("podrestart").onclick = ()=>{
     if(!_pod) return;
     try{ _pod.currentTime = 0; }catch(_){}
@@ -1287,17 +1472,19 @@ function wire(){
     pp.onclick=podToggle; syncPod();
     // Readiness check on load (status only; the render is warmed on ingest and,
     // failing that, by the audio GET when someone taps play).
-    if(!_pod && !_podBusy) podMeta().then(m=>{
+    const genKey = (state.data && state.data.generatedAt) || "none";
+    if(!_pod && !_podBusy && window.__podMetaFor !== genKey){ window.__podMetaFor = genKey; podMeta().then(m=>{
       if(m && m.ready) window.__podReady = true;   // sticky: re-renders keep the ⬇ once the MP3 is cached
       const dl=document.getElementById("poddl");
       if(dl && window.__podReady) dl.style.display="inline-flex";
       const s=document.getElementById("podsub"); if(!s||_pod||_podBusy) return;
       s.textContent = (m&&m.ready) ? "Ready · the day's news, talked through" : (m&&m.turns ? "Tap play to listen" : "Built with the next refresh");
-    });
+    }); }
   }
   document.querySelectorAll("[data-restore]").forEach(b=> b.onclick = ()=> restoreType(b.dataset.restore));
   $("markall") && ($("markall").onclick = ()=>{
     visibleItems().forEach(it=>{ state.read.add(it.id); });   // read (recoverable), NOT dismissed — mark-all is not "never show again"
+    state.showEarlier = false;   // else the reveal filter makes mark-all look like a no-op
     saveRead(); render();
   });
   $("show-earlier") && ($("show-earlier").onclick = ()=>{ state.showEarlier = true; render(); });

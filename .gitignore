@@ -5,3 +5,9 @@ node_modules/
 *.log
 .DS_Store
 
+
+# keys & generated payloads — never commit
+*.p8
+*.pem
+payload.json
+.dev.vars.*
