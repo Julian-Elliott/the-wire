@@ -1321,7 +1321,7 @@ function podPlayNext(){
       const c=document.getElementById("podcur"), sk=document.getElementById("podseek"), d=document.getElementById("poddur");
       if(c) c.textContent=fmtT(_pod.currentTime);
       if(d && isFinite(_pod.duration)) d.textContent=fmtT(_pod.duration);
-      if(sk && isFinite(_pod.duration) && !window.__podScrub) sk.value=String(Math.round(1000*_pod.currentTime/_pod.duration));
+      if(sk && isFinite(_pod.duration) && !window.__podScrub) sk.value=String(Math.min(1000, Math.round(1000*_pod.currentTime/_pod.duration)));
       const sec=Math.floor(_pod.currentTime);
       if(track.key && sec!==window.__podSaved){ window.__podSaved=sec; try{ localStorage.setItem("jackwire:podpos", JSON.stringify({key:track.key,t:sec})); }catch(_){} }
       try{ if(navigator.mediaSession && isFinite(_pod.duration)) navigator.mediaSession.setPositionState({duration:_pod.duration, playbackRate:_pod.playbackRate, position:Math.min(_pod.currentTime,_pod.duration)}); }catch(_){}

@@ -1077,10 +1077,40 @@ async function renderPodcast(env, turns) {
     const batch = await Promise.all(chunks.slice(i, i + POD_RENDER_CONCURRENCY).map(renderChunk));
     parts.push(...batch);
   }
-  const total = parts.reduce((n, p) => n + p.length, 0);
+  const cleaned = parts.map(stripMp3Head);
+  const total = cleaned.reduce((n, p) => n + p.length, 0);
   const out = new Uint8Array(total); let off = 0;
-  for (const p of parts) { out.set(p, off); off += p.length; }
+  for (const p of cleaned) { out.set(p, off); off += p.length; }
   return out;
+}
+
+// Strip a chunk's ID3v2 tag and Xing/Info VBR header frame before byte-concat.
+// Each rendered chunk declares ONLY ITS OWN length in that header, so players
+// read chunk one's header and believe the whole episode is that long (elapsed
+// overruns "total" while audio keeps playing). Without any Xing frame the
+// stream is plain CBR 128k and players time it correctly from byte length.
+function stripMp3Head(bytes) {
+  let off = 0;
+  if (bytes.length > 10 && bytes[0] === 0x49 && bytes[1] === 0x44 && bytes[2] === 0x33) {   // "ID3"
+    const size = ((bytes[6] & 0x7f) << 21) | ((bytes[7] & 0x7f) << 14) | ((bytes[8] & 0x7f) << 7) | (bytes[9] & 0x7f);
+    off = 10 + size + ((bytes[5] & 0x10) ? 10 : 0);
+  }
+  while (off + 4 < bytes.length && !(bytes[off] === 0xff && (bytes[off + 1] & 0xe0) === 0xe0)) off++;   // find frame sync
+  const b2 = bytes[off + 1], b3 = bytes[off + 2];
+  const verBits = (b2 >> 3) & 3, layerBits = (b2 >> 1) & 3;
+  const brIdx = (b3 >> 4) & 15, srIdx = (b3 >> 2) & 3, pad = (b3 >> 1) & 1;
+  const BR = [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 0];
+  const SR = [44100, 48000, 32000, 0];
+  if (verBits === 3 && layerBits === 1 && brIdx > 0 && brIdx < 15 && srIdx < 3) {   // MPEG1 Layer III
+    const frameLen = Math.floor(144 * BR[brIdx] * 1000 / SR[srIdx]) + pad;
+    for (const xo of [off + 4 + 32, off + 4 + 17]) {   // stereo / mono side-info offsets
+      if (xo + 4 <= bytes.length) {
+        const tag = String.fromCharCode(bytes[xo], bytes[xo + 1], bytes[xo + 2], bytes[xo + 3]);
+        if (tag === "Xing" || tag === "Info") return bytes.subarray(off + frameLen);
+      }
+    }
+  }
+  return off ? bytes.subarray(off) : bytes;
 }
 
 async function sha16(text) {
@@ -1094,7 +1124,7 @@ async function sha16(text) {
 // later get distinct keys, rather than colliding onto one cached MP3.
 // Bump POD_RENDER_VERSION whenever the rendering changes (e.g. adding beats) so
 // already-cached episodes re-render with the new audio instead of serving stale.
-const POD_RENDER_VERSION = "v5";   // v5: exchange-boundary chunk packing + stability 0.35
+const POD_RENDER_VERSION = "v6";   // v6: Xing/ID3 stripped per chunk (accurate duration); v5: exchange packing + stability 0.35
 async function podcastKey(turns, date) {
   const sig = await sha16(JSON.stringify(turns));
   return `podcast/${date || londonDate()}/${sig}-${POD_RENDER_VERSION}.mp3`;
