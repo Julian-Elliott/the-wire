@@ -1132,6 +1132,101 @@ async function ttsRender(env, text, voiceId) {
   return new Uint8Array(await res.arrayBuffer());
 }
 
+// ---- story images (#26): source-aware enrichment at ingest ---------------
+// Priority: Guardian Content API thumbnail (explicit free-tier licence, key
+// verified to include thumbnails) → og:image / twitter:image scraped from the
+// article (the implied preview-card licence every feed reader relies on) →
+// none, and the card renders text-only. Chosen image BYTES are cached in R2
+// and served from /api/img/<id> — never hotlinked (link rot, signed URLs,
+// future hotlink protection, referrer leakage). img/ expires from R2 in 14d.
+const IMG_PREFIX = "img/";
+const IMG_UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1";
+
+async function guardianThumb(env, articleUrl) {
+  if (!env.GUARDIAN_API_KEY) return null;
+  try {
+    const u = new URL(articleUrl);
+    if (!/(^|\.)theguardian\.com$/i.test(u.hostname)) return null;
+    const path = u.pathname.replace(/^\/+|\/+$/g, "");
+    if (!path) return null;
+    const c = new AbortController(); const t = setTimeout(() => c.abort(), 5000);
+    try {
+      const res = await fetch(`https://content.guardianapis.com/${path}?api-key=${env.GUARDIAN_API_KEY}&show-fields=thumbnail`, { signal: c.signal });
+      if (!res.ok) return null;
+      const d = await res.json();
+      return (d && d.response && d.response.content && d.response.content.fields && d.response.content.fields.thumbnail) || null;
+    } finally { clearTimeout(t); }
+  } catch (_) { return null; }
+}
+
+async function ogImage(articleUrl) {
+  const c = new AbortController(); const t = setTimeout(() => c.abort(), 6000);
+  try {
+    const res = await fetch(articleUrl, {
+      redirect: "follow", signal: c.signal,
+      headers: { "user-agent": IMG_UA, "accept": "text/html,application/xhtml+xml", "accept-language": "en-GB,en;q=0.9" },
+    });
+    if (!res.ok || !/text\/html/i.test(res.headers.get("content-type") || "")) { try { if (res.body) await res.body.cancel(); } catch (_) {} return null; }
+    let img = null;
+    const grab = { element(el) { if (!img) { const v = el.getAttribute("content"); if (v) img = v; } } };
+    const transformed = new HTMLRewriter()
+      .on('meta[property="og:image"]', grab)
+      .on('meta[name="twitter:image"]', grab)
+      .on('meta[property="twitter:image"]', grab)
+      .transform(res);
+    // Drive the parser only as far as needed — og tags live in <head>.
+    const reader = transformed.body.getReader();
+    let read = 0;
+    while (!img && read < 262144) { const { done, value } = await reader.read(); if (done) break; read += value.byteLength; }
+    try { await reader.cancel(); } catch (_) {}
+    return img;
+  } catch (_) { return null; }
+  finally { clearTimeout(t); }
+}
+
+async function cacheImage(env, srcUrl, baseUrl) {
+  try {
+    let abs; try { abs = new URL(srcUrl, baseUrl).toString(); } catch (_) { return null; }
+    const src = httpUrl(abs);
+    if (!src || !env.WIRE_AUDIO) return null;
+    const name = (await sha16(src)) + ".img";
+    const key = IMG_PREFIX + name;
+    if (await env.WIRE_AUDIO.head(key)) return name;
+    const c = new AbortController(); const t = setTimeout(() => c.abort(), 8000);
+    try {
+      const res = await fetch(src, { redirect: "follow", signal: c.signal, headers: { "user-agent": IMG_UA, "accept": "image/*" } });
+      // Raster types ONLY — image/svg+xml is a script container, and /api/img
+      // serves these bytes back on our origin (stored-XSS vector otherwise).
+      const ct = (res.headers.get("content-type") || "").split(";")[0].trim().toLowerCase();
+      if (!res.ok || !/^image\/(jpeg|jpg|png|webp|gif|avif)$/.test(ct)) { try { if (res.body) await res.body.cancel(); } catch (_) {} return null; }
+      const declared = Number(res.headers.get("content-length"));
+      if (isFinite(declared) && declared > 3_000_000) { try { if (res.body) await res.body.cancel(); } catch (_) {} return null; }
+      const buf = await res.arrayBuffer();
+      if (buf.byteLength < 1500 || buf.byteLength > 3_000_000) return null;   // tracking pixels and monsters
+      await env.WIRE_AUDIO.put(key, buf, { httpMetadata: { contentType: ct } });
+      return name;
+    } finally { clearTimeout(t); }
+  } catch (_) { return null; }
+}
+
+// Attach `img` (an /api/img id) to each fresh item that yields one. Bounded:
+// small concurrency, hard per-fetch timeouts; a miss just means a text card.
+async function enrichImages(env, items) {
+  if (!env.WIRE_AUDIO) return;
+  const withUrl = (items || []).filter(it => it && it.url).slice(0, 40);   // bound wall time + subrequests on oversized payloads
+  const CONC = 6;
+  for (let i = 0; i < withUrl.length; i += CONC) {
+    await Promise.all(withUrl.slice(i, i + CONC).map(async it => {
+      try {
+        const src = (await guardianThumb(env, it.url)) || (await ogImage(it.url));
+        if (!src) return;
+        const name = await cacheImage(env, src, it.url);
+        if (name) it.img = name;
+      } catch (_) {}
+    }));
+  }
+}
+
 // Trust the desk id supplied per item; assign our own ids and clamp lengths.
 function normalizeIngest(items) {
   return (items || [])
@@ -1201,6 +1296,9 @@ async function ingestBriefing(env, payload, target) {
   const freshRecent = dropStale(env, fresh, nowSec);
   const staleDropped = fresh.length - freshRecent.length;
   const freshUnseen = dropSeen(freshRecent, seen.keys);
+  // Story images (#26): enrich only what survived dedup. Adds ~10-20s to the
+  // routine's POST — fine next to the awaited podcast prewarm; never throws.
+  try { await enrichImages(env, freshUnseen); } catch (_) {}
 
   let prior = [];
   const existing = await readJSON(env, writeKeys.latest);
@@ -1614,6 +1712,23 @@ ${items.join("\n")}
         if (!preview) return json({ error: "Couldn't build a preview — try rewording the topic." }, 502);
         return json(preview);
       } catch (e) { return json({ error: "preview failed", detail: String(e) }, 500); }
+    }
+
+    // Cached story thumbnails (see enrichImages). Content-addressed, immutable.
+    if (url.pathname.startsWith("/api/img/") && request.method === "GET") {
+      if (!env.WIRE_AUDIO) return json({ error: "not configured" }, 404);
+      const name = url.pathname.slice("/api/img/".length).replace(/[^A-Za-z0-9._-]/g, "");
+      if (!name) return json({ error: "missing image id" }, 400);
+      const obj = await env.WIRE_AUDIO.get(IMG_PREFIX + name);
+      if (!obj) return json({ error: "image expired" }, 404);
+      return new Response(obj.body, { headers: {
+        "content-type": (obj.httpMetadata && obj.httpMetadata.contentType) || "image/jpeg",
+        "cache-control": "public, max-age=604800, immutable",
+        // Belt and braces with the store-time raster allowlist: never sniff,
+        // never execute — these bytes came from arbitrary news CDNs.
+        "x-content-type-options": "nosniff",
+        "content-security-policy": "default-src 'none'",
+      } });
     }
 
     // Per-item read-out audio. Lazily rendered via ElevenLabs on first play and

@@ -61,3 +61,7 @@ FEED_SOURCE = "routine"
 # ROUTINE_FIRE_URL = "https://api.anthropic.com/v1/claude_code/routines/<routine_id>/fire"
 # ROUTINE_FIRE_MIN_SECONDS = "900"   # min seconds between fires (protect the daily run cap)
 # ROUTINE_FIRE_DAILY_MAX = "15"      # hard ceiling on fires per London day, all targets combined
+#
+# Story images: GUARDIAN_API_KEY is an encrypted secret (wrangler secret put —
+# NOT here). Free developer tier, non-commercial, thumbnails included; used
+# only for theguardian.com links. Without it, og:image scraping still runs.
