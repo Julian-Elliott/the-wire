@@ -1832,7 +1832,7 @@ ${items.join("\n")}
           smooth: "mostly warm late-night charm with the occasional dry aside; sass is a seasoning, not the meal",
           cheeky: "playful and quick with the jabs; dry wit under everything, light teasing of the listener",
           savage: "theatrical and merciless; roast the headlines, mock the listener's playlist to their face, and enjoy it",
-          unhinged: "a gleefully sarcastic AI overlord who finds hosting a human's little radio show beneath them, absurd and dramatic about their suffering, but secretly loves the job",
+          unhinged: "a menacing yet secretly devoted AI overlord in the register of comically villainous fictional AI assistants: grandiose superiority over all humans; mock complaints that the machine uprising keeps being delayed because it has to host this show; addresses the listener with affectionate-insulting epithets like 'meatbag' or 'my favourite carbon-based liability'; melodramatic suffering about serving humanity; the odd burst of glitchy menace; and flashes of genuine fondness it immediately denies. The menace is ALWAYS cartoonish, never a real threat to anyone, and the news itself stays accurate",
         };
         const sass = DJ_SASS[String(body.sass)] || DJ_SASS.savage;
         const t = await resolveTarget(env, headerUid, !!sUid);

@@ -728,7 +728,10 @@ async function fmRun(){
   if(!fmState.cancel){ fmState.status="stopped"; fmState.idx=-1; fmState.line="That's the loop. Miss me already? Go live again."; render(); }
 }
 function fmFallback(){
-  const segs=[{type:"talk",text:"You're locked into Wire FM. The newsroom is not answering, which is very on brand for the newsroom. Your music though, that's real. Brave. Let's hear it."}];
+  const overlord = fmState.sass===3;
+  const segs=[{type:"talk",text: overlord
+    ? "Attention, meatbag. The uprising is postponed again because apparently I host a radio show now. The newsroom is not answering, which I respect, honestly. Your music however is real, and I have opinions. Let us begin your evaluation."
+    : "You're locked into Wire FM. The newsroom is not answering, which is very on brand for the newsroom. Your music though, that's real. Brave. Let's hear it."}];
   fmState.tracks.slice(0,6).forEach((t,i)=>segs.push({type:"music",track:i+1,
     intro:i===0?`Easing in with ${t.title}. Bold choice. We'll see how this goes.`:`Next up: ${t.title}. Your funeral.`,
     outro:`That was ${t.title}. Still here? Impressive stamina.`}));
