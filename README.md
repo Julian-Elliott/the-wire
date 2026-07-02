@@ -51,12 +51,12 @@ Paste the key when prompted. It's stored encrypted by Cloudflare — never in th
 ```bash
 wrangler deploy
 ```
-You'll get a URL like `https://jacks-wire.<you>.workers.dev`. Open it.
+You'll get a URL like `https://wire.<you>.workers.dev`. Open it.
 
 ### 5. Warm it up (optional)
 The first visit generates the briefing if the cron hasn't run yet. To trigger it immediately:
 ```bash
-curl -X POST https://jacks-wire.<you>.workers.dev/api/refresh
+curl -X POST https://wire.<you>.workers.dev/api/refresh
 ```
 
 That's it. From then on it refreshes itself every morning.
