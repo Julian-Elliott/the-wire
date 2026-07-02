@@ -114,13 +114,10 @@ a{ color:inherit; text-decoration:none; }
 .setup-foot .refresh{ min-width:200px; height:40px; }
 
 .desk{ border:1px solid var(--line); border-radius:11px; padding:10px 12px; margin-bottom:8px; background:var(--panel2); }
-.desk.off{ opacity:.5; }
 .desk-h{ display:flex; align-items:center; gap:8px; }
 .desk-dot{ width:9px; height:9px; border-radius:50%; flex:0 0 auto; }
 .desk-name{ font-weight:600; font-size:13.5px; }
 .desk-persona{ font-family:'JetBrains Mono',monospace; font-size:9.5px; letter-spacing:.04em; color:var(--faint); }
-.desk-toggle{ margin-left:auto; background:var(--panel); border:1px solid var(--line); color:var(--text); border-radius:7px; padding:3px 11px; font-size:11.5px; cursor:pointer; font-family:'Inter',sans-serif; }
-.desk.off .desk-toggle{ color:var(--muted); }
 .desk-rm{ background:transparent; border:1px solid var(--line); color:var(--faint); border-radius:7px; padding:3px 9px; font-size:11.5px; cursor:pointer; font-family:'Inter',sans-serif; }
 .desk-rm:hover{ color:var(--down); border-color:var(--down); }
 .desk-reorder{ display:inline-flex; flex-direction:column; gap:0; margin-right:3px; }
@@ -192,7 +189,9 @@ a{ color:inherit; text-decoration:none; }
 .type:hover{ color:var(--down); border-color:var(--down); }
 .move{ font-family:'JetBrains Mono',monospace; font-size:12px; font-weight:700; }
 .src{ font-family:'JetBrains Mono',monospace; font-size:10.5px; color:var(--faint); }
-.listen{ margin-left:auto; flex-shrink:0; display:inline-flex; align-items:center; justify-content:center; width:26px; height:26px; border-radius:50%; border:1px solid var(--line); background:transparent; color:var(--muted); font-size:10px; cursor:pointer; padding:0; position:relative; }
+.listen{ flex-shrink:0; display:inline-flex; align-items:center; justify-content:center; width:26px; height:26px; border-radius:50%; border:1px solid var(--line); background:transparent; color:var(--muted); font-size:10px; cursor:pointer; padding:0; position:relative; }
+.card-meta{ margin-left:auto; display:inline-flex; align-items:center; gap:8px; min-width:0; }
+.card-src{ max-width:34vw; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .listen:hover, .listen.playing{ color:var(--amber); border-color:var(--amber); }
 .listen.loading{ opacity:.6; }
 
@@ -305,19 +304,25 @@ function orderByPref(ids){
   const rest = ids.filter(id => !pref.includes(id));
   return [...pref, ...rest];
 }
+// A desk is "live" if it's an un-removed built-in or a custom desk that still
+// exists — one rule for pills, items and settings (all desks behave alike).
+function deskLive(id){
+  return BUILTIN_ORDER.includes(id)
+    ? !(state.profile.desks.disabled||[]).includes(id)
+    : (state.profile.desks.custom||[]).some(d=>d.id===id);
+}
 function deskOrder(){
   const ids = state.data && Array.isArray(state.data.desks) && state.data.desks.length
     ? state.data.desks.map(d=>d.id)
     : BUILTIN_ORDER.concat((state.profile.desks.custom||[]).map(d=>d.id));
-  const disabled = state.profile.desks.disabled||[];
-  return orderByPref(ids.filter(id => !disabled.includes(id)));
+  return orderByPref(ids.filter(deskLive));
 }
 // Every desk (incl. disabled) in the reader's order — for the settings list.
 function allDesksOrdered(){
   return orderByPref(BUILTIN_ORDER.concat((state.profile.desks.custom||[]).map(d=>d.id)));
 }
 function moveDesk(id, dir){
-  const order = allDesksOrdered();
+  const order = activeDeskIds();   // swap within what's visible — a hidden removed desk made ▲▼ look like a no-op
   const i = order.indexOf(id); if(i<0) return;
   const j = i + dir; if(j<0 || j>=order.length) return;
   [order[i], order[j]] = [order[j], order[i]];
@@ -405,10 +410,9 @@ state.seen = loadSeen();
 
 function baseItems(){
   if(!state.data || !state.data.items) return [];
-  const disabled = state.profile.desks.disabled||[];
   return state.data.items
     .filter(i => !state.read.has(i.id) && !state.dismissed.has(itemKeyClient(i)) && !seenPrior(i))
-    .filter(i => !disabled.includes(i.category))
+    .filter(i => deskLive(i.category))   // removed desks (built-in OR custom) hide instantly
     .filter(i => (w()[i.contentType]||0) > MUTE_FLOOR);
 }
 function visibleItems(){
@@ -631,14 +635,29 @@ function muteType(t){
 function restoreType(t){ delete w()[t]; state.toast = null; syncWeights(); render(); }
 function mutedTypes(){ return Object.keys(w()).filter(k=>!k.startsWith("desk:") && w()[k] <= MUTE_FLOOR); }
 
-// ---- desk management -----------------------------------------------------
-function toggleBuiltin(id){
-  const dis = state.profile.desks.disabled;
-  const disabling = !dis.includes(id);
-  state.profile.desks.disabled = disabling ? [...dis, id] : dis.filter(x=>x!==id);
-  if(disabling && state.filter===id) state.filter="all";   // don't strand the feed on a hidden desk's filter
-  if(disabling){ saveProfile(); putProfile(false); render(); }   // hiding is instant + client-side; no rebuild needed
-  else syncDesks();                                              // enabling needs the desk researched
+// ---- desk management (one model: every desk is removable) -----------------
+function activeDeskIds(){ return allDesksOrdered().filter(deskLive); }
+function removeDesk(id){
+  if(activeDeskIds().length <= 1){
+    state.toast={msg:"Keep at least one desk on the wire"};
+    clearTimeout(window.__tt); window.__tt=setTimeout(()=>{state.toast=null;render();},3000);
+    render(); return;
+  }
+  if(state.filter===id) state.filter="all";   // don't strand the feed on a removed desk's filter
+  if(BUILTIN_ORDER.includes(id)){
+    // Built-in: removal is instant and client-side (the next build just won't
+    // research it) — no rebuild needed. It stays re-addable below the list.
+    const dis = state.profile.desks.disabled||[];
+    if(!dis.includes(id)) state.profile.desks.disabled = [...dis, id];
+    saveProfile(); putProfile(false); render();
+  } else {
+    state.profile.desks.custom = (state.profile.desks.custom||[]).filter(d=>d.id!==id);
+    syncDesks();
+  }
+}
+function readdDesk(id){ // restore a removed built-in — rebuild so it's researched again
+  state.profile.desks.disabled = (state.profile.desks.disabled||[]).filter(x=>x!==id);
+  syncDesks();
 }
 function addCustomDesk(label, topic, voice){
   topic = (topic||"").trim(); label = (label||"").trim() || topic.slice(0,28);
@@ -647,11 +666,6 @@ function addCustomDesk(label, topic, voice){
   const id = "c"+Math.random().toString(36).slice(2,8);
   state.profile.desks.custom.push({ id, label, topic, voice:(voice||"").trim(), voiceName:label, types:[] });
   state.showAddDesk = false;
-  syncDesks();
-}
-function removeCustomDesk(id){
-  state.profile.desks.custom = state.profile.desks.custom.filter(d=>d.id!==id);
-  if(state.filter===id) state.filter="all";
   syncDesks();
 }
 
@@ -821,7 +835,8 @@ function finishSetup(){
   // Merge, don't replace: re-running setup must not destroy learned weights,
   // desk notes, or a saved pill order.
   state.profile = { desks:{ disabled, custom },
-    weights: state.profile.weights||{}, notes: state.profile.notes||{}, deskOrder: state.profile.deskOrder||[] };
+    weights: state.profile.weights||{}, notes: state.profile.notes||{}, deskOrder: state.profile.deskOrder||[],
+    styles: state.profile.styles||{}, window: state.profile.window||null, show: state.profile.show||null };
   saveProfile(); markSetupDone(); state.createOpen=false;
   state.armNext = !!state.auth.signedIn;   // poll until the first personalised build lands
   render();                          // switch to the feed (building state)
@@ -888,17 +903,15 @@ function render(){
           <span class="cat" style="color:${ac}">${esc(info.label)}</span>
           ${it.why?`<button class="why-i" type="button" aria-expanded="false" aria-label="Why it matters">why</button>`:""}
           ${isNew(it)?`<span class="new-pill">NEW</span>`:""}
+          <span class="card-meta">
+            ${it.changePct?`<span class="move" style="color:${dirCol}">${arrow} ${esc(it.changePct)}</span>`:""}
+            <span class="src card-src">${esc(it.source || domainOf(it.url) || "—")}${it.addedAt?` · ${relAge(it.addedAt)}`:""}</span>
+            <button class="listen" data-listen="${esc(it.id)}" type="button" aria-label="Listen to this">▶</button>
+          </span>
         </div>
         <h3 class="h">${titleHtml}</h3>
         ${it.summary?`<p class="p">${esc(it.summary)}</p>`:""}
         ${it.why?`<div class="why-pop" hidden><b>Why it matters</b>${esc(it.why)}</div>`:""}
-        <div class="card-foot">
-          <button class="type" type="button" data-mute="${esc(it.contentType)}" title="Mute this story type">${esc(it.contentType)}</button>
-          ${it.changePct?`<span class="move" style="color:${dirCol}">${arrow} ${esc(it.changePct)}</span>`:""}
-          <span class="src">${esc(it.source || domainOf(it.url) || "—")}</span>
-          ${it.addedAt?`<span class="src">${relAge(it.addedAt)}</span>`:""}
-          <button class="listen" data-listen="${esc(it.id)}" type="button" aria-label="Listen to this">▶</button>
-        </div>
       </article>`;
     }).join("");
 
@@ -916,8 +929,12 @@ function render(){
   const settingsHtml = !state.showSettings ? "" : `
     <div class="settings">
       <div class="set-row"><span class="set-label">Desks</span><div class="set-body">
-        ${allDesksOrdered().map(id=>deskRowHtml(id, BUILTIN_ORDER.includes(id))).join("")}
-        <div class="hint">Each desk shows its personality and how it’s currently leaning, based on what you swipe. Toggle a desk on/off or remove a custom one — changes rebuild your briefing.</div>
+        ${activeDeskIds().map(id=>deskRowHtml(id)).join("")}
+        <div class="hint">Every desk works the same — message it, set its writer, reorder it, or remove it. Each learns from what you swipe.</div>
+        ${(()=>{ const removed = BUILTIN_ORDER.filter(id=>(state.profile.desks.disabled||[]).includes(id));
+          return removed.length ? `<div class="chips" style="margin-top:10px">
+            ${removed.map(id=>`<button class="chip" data-readd="${esc(id)}">＋ ${esc(CATS[id].label)}</button>`).join("")}
+          </div>` : ""; })()}
         ${state.showAddDesk ? (state.auth.signedIn ? `
           <div class="dform">
             <input id="d-label" maxlength="40" placeholder="Desk name (e.g. Formula 1, AI research, Cycling)" />
@@ -1003,8 +1020,12 @@ function render(){
     <section class="podcast" id="podbar">
       <button class="pod-play" id="podplay" type="button" aria-label="Play today's podcast">▶</button>
       <div class="pod-meta"><div class="pod-title">The latest on The Wire</div><div class="pod-sub" id="podsub">The day's news, talked through</div></div>
-      <a class="icbtn" id="poddl" href="/api/podcast/today?download=1" aria-label="Download today's episode" title="Download for offline"
-         style="display:${window.__podReady?"inline-flex":"none"};margin-left:auto;align-items:center;justify-content:center;text-decoration:none;flex:0 0 auto">⬇</a>
+      <span style="margin-left:auto;display:inline-flex;gap:8px;align-items:center;flex:0 0 auto">
+        <button class="icbtn" id="podrestart" type="button" aria-label="Restart episode" title="Restart" style="display:none">⟲</button>
+        <button class="icbtn" id="podback" type="button" aria-label="Back 15 seconds" title="Back 15s" style="display:none;font-size:10.5px">↺15</button>
+        <a class="icbtn" id="poddl" href="/api/podcast/today?download=1" aria-label="Download today's episode" title="Download for offline"
+           style="display:${window.__podReady?"inline-flex":"none"};align-items:center;justify-content:center;text-decoration:none">⬇</a>
+      </span>
     </section>
     ${(()=>{ let seen=true; try{ seen=!!localStorage.getItem("jackwire:readertip"); }catch(_){};
       const ua=navigator.userAgent, safari=/safari/i.test(ua) && !/chrome|crios|fxios|edg|android/i.test(ua);
@@ -1030,23 +1051,20 @@ function deskReport(report){
   return `<div class="diag"><div class="diag-h">Desk report</div>${rows}</div>`;
 }
 
-// A settings row for one desk: name, personality, voice, and how it's currently leaning.
-function deskRowHtml(id, builtin){
+// A settings row for one desk — every desk behaves the same: message it, set
+// its writer, reorder it, remove it. Built-in vs custom only decides the persona.
+function deskRowHtml(id){
   const info = cat(id);
-  const off = (state.profile.desks.disabled||[]).includes(id);
-  const cd = customById(id);
-  const persona = builtin ? CATS[id].persona : info.persona;
+  const persona = CATS[id] ? CATS[id].persona : info.persona;
   const note = (state.profile.notes && state.profile.notes[id]) || "";
   const lean = deskLean(id);
-  return `<div class="desk ${off?'off':''}">
+  return `<div class="desk">
     <div class="desk-h">
       <span class="desk-reorder"><button class="desk-move" data-up="${esc(id)}" aria-label="Move up">▲</button><button class="desk-move" data-down="${esc(id)}" aria-label="Move down">▼</button></span>
       <span class="desk-dot" style="background:${info.accent}"></span>
       <span class="desk-name">${esc(info.label)}</span>
       <span class="desk-persona">${esc(persona)}</span>
-      ${builtin
-        ? `<button class="desk-toggle" data-toggle="${esc(id)}">${off?'Off':'On'}</button>`
-        : `<button class="desk-rm" style="margin-left:auto" data-remove="${esc(id)}">Remove</button>`}
+      <button class="desk-rm" style="margin-left:auto" data-remove="${esc(id)}">Remove</button>
     </div>
     <textarea class="desk-note" data-note="${esc(id)}" maxlength="280" rows="2"
       placeholder="Message this desk — e.g. ‘I’m a pro, skip the basics’ or ‘no articles from the Sun’">${esc(note)}</textarea>
@@ -1114,6 +1132,9 @@ function syncPod(){
   const b=document.getElementById("podplay"); if(!b) return;
   const playing=!!(_pod && !_pod.paused && !_pod.ended);
   const loading=_podBusy || !!(_pod && !_pod.paused && _pod.readyState<3 && !_pod.ended);
+  // Transport controls only make sense while a track is loaded (not mid-render).
+  const showCtl = !!_pod && !_podBusy;
+  ["podback","podrestart"].forEach(id=>{ const el=document.getElementById(id); if(el) el.style.display = showCtl ? "inline-flex" : "none"; });
   b.classList.toggle("loading",loading);
   b.textContent = loading ? "…" : (playing ? "⏸" : "▶");
 }
@@ -1204,8 +1225,8 @@ function wire(){
     p.addEventListener("drop", (e)=>{ e.preventDefault(); reorderDesks(_dragDesk, p.dataset.deskpill); });
   });
   document.querySelectorAll("[data-mute]").forEach(b=> b.onclick = (e)=>{ e.stopPropagation(); muteType(b.dataset.mute); });
-  document.querySelectorAll("[data-toggle]").forEach(b=> b.onclick = ()=> toggleBuiltin(b.dataset.toggle));
-  document.querySelectorAll("[data-remove]").forEach(b=> b.onclick = ()=> removeCustomDesk(b.dataset.remove));
+  document.querySelectorAll("[data-remove]").forEach(b=> b.onclick = ()=> removeDesk(b.dataset.remove));
+  document.querySelectorAll("[data-readd]").forEach(b=> b.onclick = ()=> readdDesk(b.dataset.readd));
   document.querySelectorAll(".desk-note").forEach(el=> el.onchange = ()=> setDeskNote(el.getAttribute("data-note"), el.value));
   document.querySelectorAll(".desk-style").forEach(el=> el.onchange = ()=> setDeskStyle(el.getAttribute("data-style"), el.value));
   $("freshwin") && ($("freshwin").onchange = ()=> setFreshWindow($("freshwin").value));
@@ -1224,6 +1245,13 @@ function wire(){
   syncListenUI();
   const rtipX=document.getElementById("rtip-x");
   if(rtipX) rtipX.onclick=()=>{ try{ localStorage.setItem("jackwire:readertip","1"); }catch(_){} const t=document.getElementById("rtip"); if(t) t.remove(); };
+  $("podback") && ($("podback").onclick = ()=>{ if(_pod){ try{ _pod.currentTime = Math.max(0, _pod.currentTime - 15); }catch(_){} } });
+  $("podrestart") && ($("podrestart").onclick = ()=>{
+    if(!_pod) return;
+    try{ _pod.currentTime = 0; }catch(_){}
+    if(_pod.paused) _pod.play().catch(()=>{});
+    syncPod();
+  });
   const pp=document.getElementById("podplay");
   if(pp){
     pp.onclick=podToggle; syncPod();
