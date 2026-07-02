@@ -1,5 +1,35 @@
 # The Wire — v2 Plan
 
+> ## Status — 2026-07-02 sprint close
+>
+> This document is a **point-in-time snapshot of 1 July 2026**, written against the
+> pre-fix code; the inline `worker.js:…` / `index.html:…` line links no longer point
+> at the code they describe, and the "Where the app stands" bugs below are fixed.
+> Where the sprint stands:
+>
+> - **Phase 0 — complete, except the prompt-injection hardening** (item 16: the fire
+>   text is flattened/clamped, but `/api/ingest` still accepts any `userId` with the
+>   secret rather than binding it to the issued fire). Smaller leftovers: item 15
+>   (`/api/listen` key still includes `itemId`, no render lock), item 18 (cron KV
+>   list unpaginated / fires the same first ≤8 profiles in key order), and parts of
+>   items 5 and 19 (Range only on `/api/podcast/episode`, no ID3/Xing stripping, no
+>   beat tombstone, per-request `touchActive`, clamp mismatch, `urlDateSec` boundary).
+> - **Phase 1 — shipped**, with different mechanics than specified: style packs are
+>   **register-only** (`scriptDirection` in the fire text; same cast, no per-pack
+>   Voice-Design cast), previews live at `GET /api/style-preview?s=<id>` keyed
+>   `previews/<id>-v1.mp3` (manual version bump, not defHash), and the public shared
+>   `/feed.xml` shipped — per-user tokenised private feeds, Apple/Spotify submission,
+>   and the "voices are AI-generated" disclosure did not.
+> - **Phase 2 — largely shipped**: images (Guardian → og:image → R2 → `/api/img`),
+>   thumbnail cards, salience ranking, cross-outlet dedup (prompt rule + Jaccard
+>   backstop), freshness window, refresh clarity, reader tip, mark-all-read. Still
+>   open: the **training deck** (first-visit + train-on-old-news), `/api/event`
+>   engagement counters, BBC RSS/Microlink image fallbacks, the YouTube facade, the
+>   serif reading face, and embeddings dedup.
+> - **Phase 3 — in progress**: the MusicKit token endpoint is live and the key is
+>   confirmed; **radio mode ("Wire FM") is being built now** (experimental toggle,
+>   off by default); Alexa Flash Briefing not started.
+
 *From a full code review (multi-agent, every finding adversarially verified against the code) plus research into music-app integration, image sourcing, and podcast speaker styles — 1 July 2026.*
 
 ## Where the app stands
@@ -10,20 +40,20 @@ The architecture is genuinely good: routine-generated content on the subscriptio
 
 ## The ideas list — status and solution for each
 
-- [ ] **Podcast generator fix** → Four verified bugs cause the flaky behaviour; fix list in Phase 0 below. The headline ones: the render lock is deleted by callers that never acquired it ([worker.js:948](../src/worker.js#L948)), and the player retries ~10–15s against a ~40s render ([index.html:910](../public/index.html#L910)) so first plays die with "Couldn't load the episode".
-- [ ] **User-selectable podcast audio type with example audio** → "Style packs" (Phase 1). Verified: ElevenLabs Text-to-Dialogue has *no* per-turn style params — the levers are per-request `stability`, v3 audio tags, script register, and swapping in a different Voice-Design cast per pack. Render one ~15s preview per style once, cache in R2, play next to each choice.
+- [x] **Podcast generator fix** → Four verified bugs cause the flaky behaviour; fix list in Phase 0 below. The headline ones: the render lock is deleted by callers that never acquired it ([worker.js:948](../src/worker.js#L948)), and the player retries ~10–15s against a ~40s render ([index.html:910](../public/index.html#L910)) so first plays die with "Couldn't load the episode".
+- [x] **User-selectable podcast audio type with example audio** → "Style packs" (Phase 1). Verified: ElevenLabs Text-to-Dialogue has *no* per-turn style params — the levers are per-request `stability`, v3 audio tags, script register, and swapping in a different Voice-Design cast per pack. Render one ~15s preview per style once, cache in R2, play next to each choice.
 - [ ] **Swipe to train it on old news** → Training deck (Phase 2). Serve a calibration deck from the daily snapshots already kept 5 days in KV (`briefing:<date>`); swipes feed the existing weights without marking anything read.
 - [x] **Change news selection (desks)** → Already shipped (onboarding picker, settings toggles, custom desks, reorder). Two bugs undermine it: desk changes never deliver the rebuilt feed (poll gate, [index.html:485](../public/index.html#L485)) and the signed-out picker sells desks that can never produce content ([index.html:662](../public/index.html#L662)). Fix both in Phase 0 and this is done.
-- [ ] **Select writer type** → Per-desk "writer" presets (Phase 2): a small set of registers (Brief & factual / Colour writer / Analyst / Tabloid punch) stored on the profile and injected into the desk prompt exactly like `notes` already is. The plumbing (notes → prompt) exists; this is a UI + preset copy job.
-- [ ] **Prioritise by international engagement then user engagement** → No engagement data exists server-side. Two-step (Phase 2): (a) have the routine stamp each item with a 1–5 `salience` ("front-page-ness" across outlets — it can see this during research); rank by salience first, learned weights second. (b) later, aggregate real engagement via a tiny `/api/event` endpoint + KV counters.
+- [x] **Select writer type** → Per-desk "writer" presets (Phase 2): a small set of registers (Brief & factual / Colour writer / Analyst / Tabloid punch) stored on the profile and injected into the desk prompt exactly like `notes` already is. The plumbing (notes → prompt) exists; this is a UI + preset copy job.
+- [x] *(part (a) shipped; (b) `/api/event` still open)* **Prioritise by international engagement then user engagement** → No engagement data exists server-side. Two-step (Phase 2): (a) have the routine stamp each item with a 1–5 `salience` ("front-page-ness" across outlets — it can see this during research); rank by salience first, learned weights second. (b) later, aggregate real engagement via a tiny `/api/event` endpoint + KV counters.
 - [ ] **Reader tip / font / "one and done" / first-visit training deck** → Phase 2: cut the tip to one line, make it a swipeable card (the machinery exists), fold it into a 2–3 card first-visit training deck (swipe-to-tune, reader tip, podcast intro). Add a serif reading face (e.g. Literata/Source Serif) for summaries.
-- [ ] **Add images and videos** → Verified pipeline (Phase 2): source-aware, at ingest — Guardian Content API `fields.thumbnail` (free tier confirmed live to include images), BBC RSS `media:thumbnail` (confirmed live), else og:image via `HTMLRewriter` with browser-ish headers (~60–85% hit rate), Microlink free tier as fallback; cache bytes to R2, serve from `/api/img/:id`. **Don't hotlink** (rot, signed URLs) and don't use `/cdn-cgi/image` URL transforms (needs per-origin allowlists). Video: YouTube only — oEmbed thumbnail facade, `youtube-nocookie.com` iframe on tap. Keep thumbnails preview-sized + attributed (no UK personal-use copyright exception; publisher-supplied images are the clean path).
-- [ ] **Streamline the card (photo, iMessage-style)** → Phase 2, lands with images: thumbnail left like a Messages link preview, one metadata row, "why" stays as the inline expander.
-- [ ] **Assess duplication of stories (same story, different outlet)** → Current dedup is exact URL/title only, so cross-outlet repeats slip. Phase 2: (a) routine instruction to pick ONE outlet per story cluster; (b) server-side near-dup backstop at ingest — normalised-title token overlap (Jaccard ≥ ~0.6) within desk+day; (c) optional upgrade: Workers AI embeddings (`bge-small`) cosine similarity.
-- [ ] **Clarity around 15-min refresh** → The server already returns `throttled`/`retryInSec`; surface it properly (Phase 0/2): countdown on the Refresh button ("New pull in ~12m"), "Updated 13:02 · next pull ~18:00" line, and actually deliver the refreshed feed (poll fix).
-- [ ] **"Set all articles above to read"** → Phase 2, small: a "Mark all read" action per filter (and/or below the fold) adding visible ids to the existing read/dismissed stores.
-- [ ] **Podcast variety of speakers (Whiley vs Laverne vs Moyles; Shearer/Neville/Richards)** → Same feature as audio-type selection: 3–4 named ORIGINAL show styles. Legal/policy verified: register emulation is fine; real names may appear ONLY in the Claude script-direction prompt — never in UI copy, ElevenLabs voice descriptions, or spoken text (ElevenLabs impersonation policy + UK passing-off). Suggested packs: **The Wake-Up** (zoo-radio breakfast, stability ~0.2, `[excited]`/`[laughs]`), **The Green Room** (warm evening magazine, 0.5, `[warm]`/`[thoughtful]`), **Full Time** (football panel, ~0.3, quick volleys), **The Briefing** (current default).
-- [ ] **Link to music apps, news every 30 min** → Verified: **no API on Spotify or Apple Music can inject audio into the user's native-app stream.** Do instead (Phase 3): (1) **Podcast RSS feed** — one Worker route over the R2 episodes you already render; public shared feed (submit to Apple Podcasts/Spotify) + per-user tokenised private feeds with `itunes:block` (add via "Follow a Show by URL"/Overcast; Spotify can't add private feeds). (2) **Radio mode** page via **MusicKit JS** (needs £79/yr Apple Developer Program; user is the Apple Music subscriber): play their music in-page, pause on a timer, play the bulletin, resume — Safari-reliable. Spotify Connect pause/resume works but Development Mode caps at 5 allowlisted users forever — personal hack only. Optional afternoon job: Alexa Flash Briefing JSON feed (still supported). Skip Google (Assistant sunsets ~March 2026).
+- [x] *(images shipped — Guardian → og:image → R2; BBC RSS/Microlink fallbacks and the video facade still open)* **Add images and videos** → Verified pipeline (Phase 2): source-aware, at ingest — Guardian Content API `fields.thumbnail` (free tier confirmed live to include images), BBC RSS `media:thumbnail` (confirmed live), else og:image via `HTMLRewriter` with browser-ish headers (~60–85% hit rate), Microlink free tier as fallback; cache bytes to R2, serve from `/api/img/:id`. **Don't hotlink** (rot, signed URLs) and don't use `/cdn-cgi/image` URL transforms (needs per-origin allowlists). Video: YouTube only — oEmbed thumbnail facade, `youtube-nocookie.com` iframe on tap. Keep thumbnails preview-sized + attributed (no UK personal-use copyright exception; publisher-supplied images are the clean path).
+- [x] **Streamline the card (photo, iMessage-style)** → Phase 2, lands with images: thumbnail left like a Messages link preview, one metadata row, "why" stays as the inline expander.
+- [x] *((a)+(b) shipped; embeddings upgrade open)* **Assess duplication of stories (same story, different outlet)** → Current dedup is exact URL/title only, so cross-outlet repeats slip. Phase 2: (a) routine instruction to pick ONE outlet per story cluster; (b) server-side near-dup backstop at ingest — normalised-title token overlap (Jaccard ≥ ~0.6) within desk+day; (c) optional upgrade: Workers AI embeddings (`bge-small`) cosine similarity.
+- [x] **Clarity around 15-min refresh** → The server already returns `throttled`/`retryInSec`; surface it properly (Phase 0/2): countdown on the Refresh button ("New pull in ~12m"), "Updated 13:02 · next pull ~18:00" line, and actually deliver the refreshed feed (poll fix).
+- [x] **"Set all articles above to read"** → Phase 2, small: a "Mark all read" action per filter (and/or below the fold) adding visible ids to the existing read/dismissed stores.
+- [x] *(shipped as the 4 named show styles)* **Podcast variety of speakers (Whiley vs Laverne vs Moyles; Shearer/Neville/Richards)** → Same feature as audio-type selection: 3–4 named ORIGINAL show styles. Legal/policy verified: register emulation is fine; real names may appear ONLY in the Claude script-direction prompt — never in UI copy, ElevenLabs voice descriptions, or spoken text (ElevenLabs impersonation policy + UK passing-off). Suggested packs: **The Wake-Up** (zoo-radio breakfast, stability ~0.2, `[excited]`/`[laughs]`), **The Green Room** (warm evening magazine, 0.5, `[warm]`/`[thoughtful]`), **Full Time** (football panel, ~0.3, quick volleys), **The Briefing** (current default).
+- [ ] *(public `/feed.xml` + MusicKit token endpoint shipped; radio-mode UI in progress; private feeds/Alexa open)* **Link to music apps, news every 30 min** → Verified: **no API on Spotify or Apple Music can inject audio into the user's native-app stream.** Do instead (Phase 3): (1) **Podcast RSS feed** — one Worker route over the R2 episodes you already render; public shared feed (submit to Apple Podcasts/Spotify) + per-user tokenised private feeds with `itunes:block` (add via "Follow a Show by URL"/Overcast; Spotify can't add private feeds). (2) **Radio mode** page via **MusicKit JS** (needs £79/yr Apple Developer Program; user is the Apple Music subscriber): play their music in-page, pause on a timer, play the bulletin, resume — Safari-reliable. Spotify Connect pause/resume works but Development Mode caps at 5 allowlisted users forever — personal hack only. Optional afternoon job: Alexa Flash Briefing JSON feed (still supported). Skip Google (Assistant sunsets ~March 2026).
 
 ---
 

@@ -1,3 +1,42 @@
+> # ⚠️ Historical design document (June 2026)
+>
+> **This is the pre-build design. The implementation diverged from it on its central
+> decision, so read it as history, not as a description of the system.** The audio
+> code that actually runs lives in the "audio" section of [`src/worker.js`](../src/worker.js)
+> (`VOICE_MAP` / `episodeVoices`, `renderPodcast`, `ensurePodcastRendered`, `ttsRender`,
+> `ensureBeat`). The main divergences, as built:
+>
+> - **§3 was inverted.** This doc chose "the routine renders the audio and uploads
+>   MP3s to R2" and explicitly rejected lazy Worker rendering. The build did the
+>   rejected option: **the Worker renders all audio itself**, with
+>   `ELEVENLABS_API_KEY` held as a **Worker secret**. The routine ships **text only**
+>   (items + podcast script via `/api/ingest`).
+> - **No ffmpeg, no routine-side stitching.** Dialogue chunks are concatenated
+>   **byte-level in the Worker** (MP3 frame concat plays fine in browsers). Chunks
+>   pack to ≤1,800 chars on exchange boundaries, `stability: 0.35`, fixed seed,
+>   concurrency 4 (`POD_RENDER_VERSION` "v5").
+> - **Read-outs use Flash (`eleven_flash_v2_5`) as the only model**, rendered lazily
+>   on first play and cached — not v3 pre-rendered in the routine. The podcast is
+>   prewarmed at ingest (awaited in the `/api/ingest` handler), with a cold-GET
+>   fallback render on `/api/podcast/today`.
+> - **§2's Voice-Design flow was never built.** Voices are a hard-coded `VOICE_MAP`
+>   of existing account voices (one per built-in desk, plus a dedicated `host`
+>   narrator this doc never mentions); custom desks take a stable hash-pick from a
+>   pool with per-episode collision avoidance.
+> - **Keys and endpoints differ:** episodes live at
+>   `podcast/<date>/<sha16(script)>-v5.mp3` (script-hash keys, no run-slot, **no
+>   chapter manifest**); `/api/podcast/today` streams directly (`?meta=1`,
+>   `?download=1`), Range is served on `/api/podcast/episode`, and `/feed.xml`,
+>   `/api/beat` and `/api/style-preview` were added later. The bucket also now holds
+>   `img/`, `beats/` and `previews/` prefixes.
+> - **§4's cleanup wish is now real:** R2 lifecycle rules expire `img/`, `listen/`
+>   and `podcast/` after **14 days** (`beats/` and `previews/` deliberately exempt).
+> - **§7's cost model no longer applies:** read-outs are lazy Flash (only played
+>   items bill), while the podcast renders per *unique script* up to 3×/day for the
+>   shared feed **and** each active personalised user — see the README's cost section.
+
+---
+
 <!-- Researched from live ElevenLabs docs (June 2026) via a 6-area research workflow; reviewed against the live docs. [VERIFY] tags mark genuinely-uncertain items to confirm against your account before building. -->
 
 ---

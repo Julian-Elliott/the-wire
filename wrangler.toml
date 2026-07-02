@@ -7,8 +7,12 @@ compatibility_date = "2026-06-01"
 directory = "./public"
 binding = "ASSETS"
 
-# Refresh the running feed three times a day (times are UTC). Each run merges
-# fresh stories into today's feed rather than replacing it.
+# Worker cron, three times a day (times are UTC). In routine mode
+# (FEED_SOURCE="routine") this does NOT build the shared feed — the routine's
+# own schedule owns that cadence. Each run here fires personalised routine
+# rebuilds for recently-active signed-in users (see MAX_PERSONALISED_PER_CRON
+# below) and, on the morning run, refreshes the onboarding pitches. With
+# FEED_SOURCE unset it falls back to building feeds via the metered API.
 #   "0 6 * * *"  = 06:00 UTC (morning, ~07:00 UK summer)
 #   "0 12 * * *" = 12:00 UTC (afternoon, ~13:00 UK summer)
 #   "0 18 * * *" = 18:00 UTC (evening, ~19:00 UK summer)
@@ -21,9 +25,12 @@ crons = ["0 6 * * *", "0 12 * * *", "0 18 * * *"]
 binding = "WIRE_KV"
 id = "d83154c6f90442f7a287cc1cd8938e80"
 
-# R2 bucket for generated audio (per-item read-outs; podcast later). The Worker
-# renders via ElevenLabs lazily on first play and caches the MP3 here. The
-# ELEVENLABS_API_KEY is an encrypted secret (wrangler secret put — NOT here).
+# R2 bucket for ALL generated media: podcast/ episodes (pre-rendered on ingest,
+# keyed by script hash), listen/ per-item read-outs (rendered lazily on first
+# play), img/ story thumbnails, beats/ intro/outro stings and previews/ style
+# tasters. Lifecycle rules (set in the Cloudflare dashboard, not here) expire
+# img/, listen/ and podcast/ after 14 days; beats/ and previews/ are evergreen.
+# The ELEVENLABS_API_KEY is an encrypted secret (wrangler secret put — NOT here).
 [[r2_buckets]]
 binding = "WIRE_AUDIO"
 bucket_name = "wire-audio"
@@ -39,6 +46,9 @@ custom_domain = true
 # encrypted secret (Dashboard → Worker → Settings → Variables, or
 # `wrangler secret put SESSION_SECRET`). Sign-in stays dormant until
 # SESSION_SECRET is also present.
+# Apple's domain-verification file is served from /.well-known/ when the
+# encrypted secret APPLE_DOMAIN_ASSOCIATION holds its contents
+# (wrangler secret put APPLE_DOMAIN_ASSOCIATION — NOT here).
 [vars]
 APPLE_CLIENT_ID = "desk.databased.business"
 APPLE_REDIRECT_URI = "https://desk.databased.business/auth/apple/callback"
@@ -64,8 +74,16 @@ FEED_SOURCE = "routine"
 # "Add another trigger" → API (claude.ai/code/routines). The token is a secret:
 #   wrangler secret put ROUTINE_FIRE_TOKEN
 # ROUTINE_FIRE_URL = "https://api.anthropic.com/v1/claude_code/routines/<routine_id>/fire"
-# ROUTINE_FIRE_MIN_SECONDS = "900"   # min seconds between fires (protect the daily run cap)
-# ROUTINE_FIRE_DAILY_MAX = "15"      # hard ceiling on fires per London day, all targets combined
+# NB: prefer `wrangler secret put ROUTINE_FIRE_URL` over a dashboard plain var —
+# deploys replace plain vars with this [vars] block, wiping dashboard-only values.
+# ROUTINE_FIRE_MIN_SECONDS = "900"   # min seconds between fires per target (protect the daily run cap)
+# ROUTINE_FIRE_DAILY_MAX = "15"      # ceiling on ON-DEMAND fires per London day (the cron's scheduled fires bypass it)
+# MAX_PERSONALISED_PER_CRON = "8"    # active users whose personalised rebuild each cron run fires via the routine
+#
+# Cross-day dedup + recency gate (defaults shown; set only to override):
+# SEEN_DEDUP = "on"          # "off" disables the rolling per-feed seen-record dedup
+# SEEN_WINDOW_DAYS = "6"     # how many days each feed's seen record remembers
+# RECENCY_GATE = "on"        # "off" stops dropping confidently-dated stale stories
 #
 # Story images: GUARDIAN_API_KEY is an encrypted secret (wrangler secret put —
 # NOT here). Free developer tier, non-commercial, thumbnails included; used
