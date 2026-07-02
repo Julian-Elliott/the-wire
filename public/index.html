@@ -230,6 +230,13 @@ const CATS = {
   world:     { label:"World",          accent:"var(--sky)",    persona:"The Advocate · INFJ",   voice:"Measured and principled — human stakes and the longer arc.", types:["Politics","International","Business","Science","Technology"] },
 };
 const BUILTIN_ORDER = ["liverpool","worcester","gaming","ev","markets","world"];
+// Podcast show styles (mirrors the worker's SHOW_STYLES keys).
+const SHOWS = {
+  briefing:  { label:"The Briefing",  desc:"Straight newsdesk — calm and clear" },
+  wakeup:    { label:"The Wake-Up",   desc:"Zoo-radio breakfast energy" },
+  greenroom: { label:"The Green Room",desc:"Warm evening magazine" },
+  fulltime:  { label:"Full Time",     desc:"Football-panel banter" },
+};
 const PALETTE = ["var(--violet)","var(--sky)","var(--teal)","var(--green)","var(--amber)","var(--red)"];
 const MUTE_FLOOR = -4;            // a contentType at/below this is hidden locally
 const LS = { uid:"jackwire:uid", profile:"jackwire:profile", read:"jackwire:read" };
@@ -267,7 +274,7 @@ const state = {
 function markSetupDone(){ state.setupDone=true; try{ localStorage.setItem("jackwire:setup","1"); }catch(_){} }
 function profileCustomised(){ const d=state.profile.desks, p=state.profile;
   return (d.disabled&&d.disabled.length)||(d.custom&&d.custom.length)||Object.keys(p.weights||{}).length
-    ||Object.keys(p.notes||{}).length||((p.deskOrder||[]).length)||Object.keys(p.styles||{}).length||!!p.window; }
+    ||Object.keys(p.notes||{}).length||((p.deskOrder||[]).length)||Object.keys(p.styles||{}).length||!!p.window||!!p.show; }
 
 const esc = s => String(s==null?"":s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 // Fallback "source" for items the routine didn't label: the URL's domain.
@@ -425,7 +432,7 @@ function profileForServer(){
   const dis = state.profile.desks.disabled||[];
   const enabled = dis.length ? BUILTIN_ORDER.filter(id=>!dis.includes(id)) : null;
   return { desks:{ enabled, custom: state.profile.desks.custom||[] }, weights: w(), notes: state.profile.notes||{}, deskOrder: state.profile.deskOrder||[],
-    styles: state.profile.styles||{}, window: state.profile.window||null };
+    styles: state.profile.styles||{}, window: state.profile.window||null, show: state.profile.show||null };
 }
 async function putProfile(regenerate){
   // Personalising is a signed-in feature now; anon tuning stays local-only so we
@@ -451,7 +458,7 @@ function adoptServerProfile(sp){
   const enabled = Array.isArray(sp.desks.enabled) ? sp.desks.enabled : null;
   const disabled = enabled ? BUILTIN_ORDER.filter(id=>!enabled.includes(id)) : [];
   state.profile = { desks:{ disabled, custom: Array.isArray(sp.desks.custom)?sp.desks.custom:[] }, weights: sp.weights||{}, notes: sp.notes||{}, deskOrder: Array.isArray(sp.deskOrder)?sp.deskOrder:[],
-    styles: sp.styles||{}, window: sp.window||null };
+    styles: sp.styles||{}, window: sp.window||null, show: sp.show||null };
   saveProfile();
 }
 async function loadServerProfile(){
@@ -500,6 +507,11 @@ function setDeskStyle(id, v){ // per-desk written register → rebuild
 function setFreshWindow(v){ // global freshness window → rebuild
   state.profile.window = v || null;
   queueRebuild();
+}
+function setShowStyle(v){ // podcast show style → next episode is produced in it
+  state.profile.show = (v && v!=="briefing") ? v : null;
+  queueRebuild();
+  render();   // move the ✓ immediately
 }
 
 // ---- data load + background-build polling --------------------------------
@@ -925,6 +937,17 @@ function render(){
         ${mutedTypes().length===0?`<span class="set-empty">None muted. Keep swiping a kind of story left and it gets muted automatically.</span>`:""}
         ${mutedTypes().map(t=>`<button class="chip muted" data-restore="${esc(t)}">${esc(t)} ✕</button>`).join("")}
       </div></div></div>
+      <div class="set-row"><span class="set-label">Podcast</span><div class="set-body">
+        <div class="hint">Pick the show's style — tap ▶ for a taster. Your next episode is produced in that register.</div>
+        ${Object.entries(SHOWS).map(([id,s])=>{
+          const cur = state.profile.show || "briefing";
+          return `<div class="row" style="align-items:center;gap:8px;margin-top:7px">
+            <button class="chip ${cur===id?"":"off"}" data-show="${id}">${cur===id?"✓ ":""}${s.label}</button>
+            <button class="listen" data-preview="${id}" type="button" aria-label="Preview ${s.label}">▶</button>
+            <span class="hint" style="margin:0">${s.desc}</span>
+          </div>`;
+        }).join("")}
+      </div></div>
       <div class="set-row"><span class="set-label">Tuning</span><div class="set-body">
         <div class="hint">Swipe a card right to mark it read, left for not-for-me. Your desks learn and the next pull is tailored to you.</div>
         <div class="row" style="margin-top:8px;align-items:center;gap:7px">
@@ -987,7 +1010,7 @@ function render(){
       const ua=navigator.userAgent, safari=/safari/i.test(ua) && !/chrome|crios|fxios|edg|android/i.test(ua);
       return (seen||!safari)?"":`<div class="rtip" id="rtip"><div>Tip: open a headline, tap <b>aA</b> → <b>Use Reader Automatically</b>. Clean reading — one and done.</div><button class="rtip-x" id="rtip-x" aria-label="Dismiss">✕</button></div>`; })()}
     <main class="feed">${onboardHtml}${feedHtml}</main>
-    <footer class="foot">British English, £, no ads, no comment columns. Your desks, each with its own voice — swipe to tune them. Editions land ~7am, 1pm and 7pm UK; your favourites float up.${pulled}</footer>
+    <footer class="foot">British English, £, no ads, no comment columns. Your desks, each with its own voice — swipe to tune them. Editions land ~7am, 1pm and 7pm UK; your favourites float up.${pulled} · <a href="/feed.xml" style="color:var(--muted);text-decoration:underline">podcast feed</a></footer>
     ${state.toast?`<div class="toast"><span>${esc(state.toast.msg)}</span>${state.toast.undo?`<button id="undo">Undo</button>`:""}</div>`:""}
   `;
   wire();
@@ -1048,6 +1071,22 @@ function syncListenUI(){
     b.classList.toggle("playing",playing); b.classList.toggle("loading",loading);
     b.textContent = loading ? "…" : (playing ? "⏸" : "▶");
   });
+}
+// ~15s show-style taster — shares the single readout player so nothing overlaps.
+function playPreview(id){
+  const pid = "preview:"+id;
+  if(_audio && _audioId===pid){ _audio.paused ? _audio.play() : _audio.pause(); syncListenUI(); return; }
+  if(_audio){ try{ _audio.pause(); }catch(_){} }
+  if(_pod && !_pod.paused){ try{ _pod.pause(); }catch(_){} syncPod(); }
+  _audio = new Audio(`/api/style-preview?s=${encodeURIComponent(id)}`);
+  _audioId = pid;
+  ["playing","pause","ended","error","waiting","canplay","loadstart"].forEach(ev=> _audio.addEventListener(ev, syncListenUI));
+  _audio.addEventListener("error", ()=>{
+    state.toast={msg:"Couldn’t play the taster — it renders on first listen, try again in a few seconds."};
+    clearTimeout(window.__tt); window.__tt=setTimeout(()=>{state.toast=null;render();},3500); render();
+  });
+  _audio.play().catch(()=> syncListenUI());
+  syncListenUI();
 }
 function toggleListen(id){
   if(_audio && _audioId===id){ _audio.paused ? _audio.play() : _audio.pause(); syncListenUI(); return; }
@@ -1170,6 +1209,8 @@ function wire(){
   document.querySelectorAll(".desk-note").forEach(el=> el.onchange = ()=> setDeskNote(el.getAttribute("data-note"), el.value));
   document.querySelectorAll(".desk-style").forEach(el=> el.onchange = ()=> setDeskStyle(el.getAttribute("data-style"), el.value));
   $("freshwin") && ($("freshwin").onchange = ()=> setFreshWindow($("freshwin").value));
+  document.querySelectorAll("[data-show]").forEach(b=> b.onclick = ()=> setShowStyle(b.dataset.show));
+  document.querySelectorAll("[data-preview]").forEach(b=> b.onclick = (e)=>{ e.stopPropagation(); playPreview(b.dataset.preview); });
   document.querySelectorAll("[data-up]").forEach(b=> b.onclick = ()=> moveDesk(b.dataset.up, -1));
   document.querySelectorAll("[data-down]").forEach(b=> b.onclick = ()=> moveDesk(b.dataset.down, 1));
   document.querySelectorAll(".why-i").forEach(b=> b.onclick = (e)=>{
@@ -1179,7 +1220,7 @@ function wire(){
     if(open) pop.removeAttribute("hidden"); else pop.setAttribute("hidden","");
     b.setAttribute("aria-expanded", open ? "true" : "false");
   });
-  document.querySelectorAll(".listen").forEach(b=> b.onclick = (e)=>{ e.stopPropagation(); toggleListen(b.getAttribute("data-listen")); });
+  document.querySelectorAll(".listen[data-listen]").forEach(b=> b.onclick = (e)=>{ e.stopPropagation(); toggleListen(b.getAttribute("data-listen")); });   // [data-listen] only — the style-taster ▶s share the class but bind to playPreview
   syncListenUI();
   const rtipX=document.getElementById("rtip-x");
   if(rtipX) rtipX.onclick=()=>{ try{ localStorage.setItem("jackwire:readertip","1"); }catch(_){} const t=document.getElementById("rtip"); if(t) t.remove(); };

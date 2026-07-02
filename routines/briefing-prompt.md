@@ -26,6 +26,10 @@ passed when the run was triggered):
   to the desk's `summary`, `why` and `readout` (the facts stay rigorous), and the
   request may include a `Freshness window:` line, which overrides the per-desk
   windows in §1 for every desk in that build.
+  The request may also include a `Podcast show style:` line — write the whole
+  `podcast` script in that register (it describes the show's energy, rhythm and
+  tag palette). Every podcast hard rule still applies unchanged; the register
+  changes HOW it is said, never the facts, the rumour flags, or the tragedy rule.
 
 ## 0.5 First, check what we've already covered
 
