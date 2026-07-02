@@ -399,17 +399,23 @@ function addDismissed(it){ const k = itemKeyClient(it); if(!k) return; const m =
 function undoDismissed(it){ const k = itemKeyClient(it); if(!k) return; const m = readDismissMap(); delete m[k]; writeDismissMap(m); state.dismissed.delete(k); }
 state.dismissed = loadDismissed();
 
-// "Already seen" — articles shown in a PRIOR session are hidden so the same
-// story doesn't reappear day-to-day. Recorded on display; filtered only when
-// seen BEFORE this session started, so reloading now never shrinks the feed.
+// "Already seen" — a story you've dwelled on stays visible until the feed
+// GETS NEW CONTENT (a newer batch of items lands), then clears away like a
+// replaced edition. Reloading never hides anything; only fresh news does.
 // Rolling 7 days, per-user (so skipping a day still surfaces that day's news).
 const SEEN_TTL = 7*24*60*60*1000;
-const SESSION_START = Date.now();
 function readSeenMap(){ try{ return JSON.parse(localStorage.getItem("jackwire:seen")||"{}")||{}; }catch(_){ return {}; } }
 function writeSeenMap(m){ try{ localStorage.setItem("jackwire:seen", JSON.stringify(m)); }catch(_){} }
 function loadSeen(){ const m=readSeenMap(), cut=Date.now()-SEEN_TTL, out={}; for(const k in m){ if(m[k]>cut) out[k]=m[k]; } writeSeenMap(out); return out; }
 function recordSeen(items){ if(!Array.isArray(items)||!items.length) return; const m=readSeenMap(), now=Date.now(); for(const it of items){ const k=itemKeyClient(it); if(k) m[k]=now; } writeSeenMap(m); state.seen=m; }
-function seenPrior(it){ const t = state.seen && state.seen[itemKeyClient(it)]; return !!(t && t < SESSION_START); }
+// Hidden only when BOTH hold: the reader has seen it, AND the feed contains a
+// newer batch than the item's own (server timestamps both sides — no client
+// clock involved). Seen items from the newest batch stay until the next pull.
+function seenPrior(it){
+  if(!(state.seen && state.seen[itemKeyClient(it)])) return false;
+  const own = it && it.addedAt ? Date.parse(it.addedAt) : 0;
+  return !!(state.newestAdd && own && own < state.newestAdd);
+}
 state.seen = loadSeen();
 
 function baseItems(){
@@ -543,7 +549,12 @@ async function fetchData(force){
 // NOTE: "seen" is recorded per-card as it scrolls into view (see wire()), NOT
 // here — recording the whole payload on fetch meant a five-second glance hid
 // the entire unread edition from the next visit.
-function applyData(data){ state.data = data; hydrateRead(data.date); if(data.items && data.items.length) markSeen(); }
+function applyData(data){
+  state.data = data; hydrateRead(data.date);
+  // The newest batch stamp in the feed — the boundary "seen" items hide behind.
+  state.newestAdd = (data.items||[]).reduce((m,i)=>{ const t=i.addedAt?Date.parse(i.addedAt):0; return t>m?t:m; }, 0);
+  if(data.items && data.items.length) markSeen();
+}
 const isBuilding = d => d && d.generating && (!d.items || !d.items.length);
 // Keep polling while an empty build runs, OR while a rebuild we kicked off
 // (manual refresh, desk change) hasn't landed — i.e. generatedAt hasn't moved
