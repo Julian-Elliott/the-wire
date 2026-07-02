@@ -1382,7 +1382,9 @@ async function podToggle(){
     { url:"/api/podcast/today", optional:false, sub:"The day's news, talked through", key:(m&&m.key)||null, date:(m&&m.date)||null },
     { url:"/api/beat?k=outro", optional:true },
   ];
-  _podI=0; _podBusy=false; podPlayNext();
+  _podI=0; _podBusy=false;
+  const pr=document.getElementById("podprog"); if(pr) pr.style.display="flex";   // show the player chrome immediately, not at first timeupdate
+  podPlayNext();
 }
 
 // ---- event wiring (incl. swipe gestures) ---------------------------------
