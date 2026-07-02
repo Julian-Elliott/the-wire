@@ -504,6 +504,11 @@ function isCustomised(p) {
   if (Array.isArray(p.desks.enabled)) return true;
   if (Array.isArray(p.desks.custom) && p.desks.custom.length) return true;
   if (p.weights && Object.keys(p.weights).length) return true;
+  // Notes and a saved desk order are personalisation too — the client counts
+  // them (profileCustomised), so the server must or a notes-only user would
+  // fire personalised builds that resolveTarget never serves.
+  if (p.notes && Object.keys(p.notes).length) return true;
+  if (Array.isArray(p.deskOrder) && p.deskOrder.length) return true;
   return false;
 }
 
@@ -1132,8 +1137,8 @@ async function ingestBriefing(env, payload, target) {
 const slug = s => String(s).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40);
 const pitchKey = id => `pitch:${id}`;
 const getPitch = (env, id) => readJSON(env, pitchKey(id));
-async function putPitch(env, id, pitch) {
-  if (env.WIRE_KV) await env.WIRE_KV.put(pitchKey(id), JSON.stringify(pitch), { expirationTtl: 60 * 60 * 30 });
+async function putPitch(env, id, pitch, ttl) {
+  if (env.WIRE_KV) await env.WIRE_KV.put(pitchKey(id), JSON.stringify(pitch), { expirationTtl: ttl || 60 * 60 * 30 });
 }
 const pitchTopic = desk => desk.builtin ? (CATS[desk.id] ? CATS[desk.id].label : desk.label) : (desk.topic || desk.label);
 
@@ -1148,9 +1153,25 @@ async function fetchPitch(env, desk) {
   return null;
 }
 async function fillPitches(env, desks) {
-  for (let i = 0; i < desks.length; i += 6) {
-    await Promise.all(desks.slice(i, i + 6).map(async d => { const p = await fetchPitch(env, d); if (p) await putPitch(env, d.id, p); }));
+  // One filler at a time: concurrent catalogue hits otherwise each schedule
+  // their own metered fill for the same missing desks.
+  if (env.WIRE_KV) {
+    try {
+      if (await env.WIRE_KV.get("pitchfill:lock")) return;
+      await env.WIRE_KV.put("pitchfill:lock", "1", { expirationTtl: 120 });
+    } catch (_) {}
   }
+  for (let i = 0; i < desks.length; i += 6) {
+    await Promise.all(desks.slice(i, i + 6).map(async d => {
+      const p = await fetchPitch(env, d);
+      // Cache failures too (short TTL): a failing pitch must not re-fire a
+      // metered web-search call on every catalogue request. But never let a
+      // transient failure overwrite a still-valid cached pitch.
+      if (p) await putPitch(env, d.id, p);
+      else if (!(await getPitch(env, d.id))) await putPitch(env, d.id, { failed: true }, 60 * 60 * 2);
+    }));
+  }
+  if (env.WIRE_KV) { try { await env.WIRE_KV.delete("pitchfill:lock"); } catch (_) {} }
 }
 function catalogueDesks() {
   const out = [];
@@ -1172,12 +1193,13 @@ async function catalogueResponse(env, request, ctx) {
   const groups = CATALOGUE.map(g => ({ name: g.name, desks: g.desks.map(d => ({ ...d })) }));
   const all = []; groups.forEach(g => g.desks.forEach(d => all.push(d)));
   if (loc) all.push(loc);
+  const pitches = await Promise.all(all.map(d => getPitch(env, d.id)));
   const missing = [];
-  for (const d of all) {
-    const p = await getPitch(env, d.id);
-    if (p) d.pitch = { title: p.title, blurb: p.blurb, source: p.source, url: p.url };
-    else missing.push(d);
-  }
+  all.forEach((d, i) => {
+    const p = pitches[i];
+    if (p && !p.failed && p.title) d.pitch = { title: p.title, blurb: p.blurb, source: p.source, url: p.url };
+    else if (!p) missing.push(d);   // a recent failure tombstone is NOT refilled per-request
+  });
   if (missing.length && ctx) ctx.waitUntil(fillPitches(env, missing.slice(0, 10)));
   return { location: loc || null, groups };
 }
@@ -1377,6 +1399,18 @@ export default {
       // API — so require an Apple session (no anonymous, unthrottled cost vector).
       if (!sUid) return json({ error: "Sign in with Apple to build your own desks." }, 401);
       try {
+        // Each preview is a metered Claude + web-search call: throttle per user
+        // (30s between previews, 20/day) so one account can't drip-drain the key.
+        if (env.WIRE_KV) {
+          const now = Math.floor(Date.now() / 1000);
+          const last = Number(await env.WIRE_KV.get(`preview:last:${sUid}`)) || 0;
+          if (now - last < 30) return json({ error: "One preview at a time — give it a few seconds and try again." }, 429);
+          const dk = `preview:day:${sUid}:${londonDate()}`;
+          const used = Number(await env.WIRE_KV.get(dk)) || 0;
+          if (used >= 20) return json({ error: "That's a lot of desk designing for one day — try again tomorrow." }, 429);
+          await env.WIRE_KV.put(`preview:last:${sUid}`, String(now), { expirationTtl: 3600 });
+          await env.WIRE_KV.put(dk, String(used + 1), { expirationTtl: 86400 * 2 });
+        }
         let body = {}; try { body = await request.json(); } catch (_) {}
         const preview = await deskPreview(env, body.topic);
         if (!preview) return json({ error: "Couldn't build a preview — try rewording the topic." }, 502);
@@ -1484,7 +1518,17 @@ export default {
           if (t.key !== "shared") {
             refresh = await firePersonalised(env, t.key.slice(2), t.profile);
           }
-          const base = hasItems ? { ...cached, generating: true } : generatingShell();
+          // No personal feed yet (first build): serve today's shared edition as
+          // an interim read instead of minutes of skeletons while the routine
+          // researches. The client labels it and keeps polling.
+          let base = hasItems ? { ...cached, generating: true } : null;
+          if (!base && t.key !== "shared") {
+            const shared = await readJSON(env, SHARED_KEY);
+            if (shared && shared.date === londonDate() && Array.isArray(shared.items) && shared.items.length) {
+              base = { ...shared, generating: true, interim: "shared" };
+            }
+          }
+          if (!base) base = generatingShell();
           return json(refresh ? { ...base, refresh } : base);
         }
         ctx.waitUntil(startBuild(env, t.key, t.profile, t.writeKeys));

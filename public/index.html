@@ -3,23 +3,36 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-<title>The Wire — Jack's edition</title>
+<title>The Wire — your personal news desk</title>
+<meta name="description" content="Your personal news desk — researched three times a day across the desks you choose, in British English, with a daily podcast. No ads, no comment columns." />
+<meta property="og:title" content="The Wire" />
+<meta property="og:description" content="A personal news desk, researched three times a day, with its own daily podcast." />
+<meta name="theme-color" media="(prefers-color-scheme: dark)" content="#14161B" />
+<meta name="theme-color" media="(prefers-color-scheme: light)" content="#F4F1EA" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="The Wire" />
+<link rel="manifest" href="/manifest.json" />
+<link rel="icon" href="/icon.svg" type="image/svg+xml" />
+<link rel="apple-touch-icon" href="/apple-touch-icon.png" />
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700;12..96,800&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@500;700&display=swap');
 
 :root{
   --ink:#14161B; --panel:#1B1E26; --panel2:#222732; --line:#2E333F;
-  --text:#ECE7DB; --muted:#969BA8; --faint:#6A6F7C;
+  --text:#ECE7DB; --muted:#969BA8; --faint:#6A6F7C; --body:#cfcabd;
   --amber:#F2A93B; --red:#E23B4C; --up:#46C06A; --down:#F0563A;
   --violet:#9B8CFF; --sky:#5BB8E8; --green:#5FBE7E; --teal:#2FC8C8;
 }
 /* Light mode: override the palette; everything else uses these vars. */
 body[data-theme="light"]{
   --ink:#F4F1EA; --panel:#FFFFFF; --panel2:#F1EDE5; --line:#DFDACE;
-  --text:#1A1D24; --muted:#5C626C; --faint:#9197A1;
+  --text:#1A1D24; --muted:#5C626C; --faint:#9197A1; --body:#3A3F49;
   --amber:#B5730C; --red:#CB2F40; --up:#2E9E54; --down:#D8482C;
   --violet:#6F5BE0; --sky:#2E8FC4; --green:#3A9E5E; --teal:#1FA3A3;
 }
+body[data-theme="light"] .sw.like{ color:#1D6B38; background:rgba(46,158,84,.14); }
+body[data-theme="light"] .sw.nope{ color:#A03322; background:rgba(216,72,44,.12); }
 *{ box-sizing:border-box; }
 body{
   margin:0; background:radial-gradient(120% 80% at 50% -10%, rgba(242,169,59,.10), transparent 55%), var(--ink);
@@ -87,7 +100,7 @@ a{ color:inherit; text-decoration:none; }
 .pick.on .pick-check{ background:var(--ac); color:#15171b; border-color:var(--ac); font-weight:700; }
 .pick-persona{ font-family:'JetBrains Mono',monospace; font-size:9.5px; color:var(--faint); margin:2px 0 8px; letter-spacing:.04em; }
 .pick-pitch{ border-top:1px dashed var(--line); padding-top:8px; }
-.pick-h{ display:block; font-size:13px; line-height:1.3; color:#cfcabd; }
+.pick-h{ display:block; font-size:13px; line-height:1.3; color:var(--body); }
 .pick-src{ font-family:'JetBrains Mono',monospace; font-size:10px; color:var(--faint); }
 .pick-quiet{ color:var(--faint); font-size:12px; font-style:italic; }
 .pick-create{ grid-column:1 / -1; border:1px dashed var(--amber); border-left-width:1px; background:rgba(242,169,59,.06); text-align:center; display:flex; align-items:center; justify-content:center; gap:6px; font-weight:700; font-size:14px; color:var(--amber); padding:14px; }
@@ -111,7 +124,7 @@ a{ color:inherit; text-decoration:none; }
 .desk-rm{ background:transparent; border:1px solid var(--line); color:var(--faint); border-radius:7px; padding:3px 9px; font-size:11.5px; cursor:pointer; font-family:'Inter',sans-serif; }
 .desk-rm:hover{ color:var(--down); border-color:var(--down); }
 .desk-reorder{ display:inline-flex; flex-direction:column; gap:0; margin-right:3px; }
-.desk-move{ background:transparent; border:0; color:var(--faint); cursor:pointer; font-size:8px; line-height:1.05; padding:1px 2px; }
+.desk-move{ background:transparent; border:0; color:var(--faint); cursor:pointer; font-size:10px; line-height:1.1; padding:5px 8px; }
 .desk-move:hover{ color:var(--amber); }
 .desk-voice{ color:var(--muted); font-size:12.5px; margin-top:6px; line-height:1.45; }
 .desk-note{ width:100%; margin-top:7px; box-sizing:border-box; resize:vertical; min-height:38px; background:var(--bg); color:var(--text); border:1px solid var(--line); border-radius:8px; padding:7px 9px; font-family:inherit; font-size:12.5px; line-height:1.4; }
@@ -138,8 +151,8 @@ a{ color:inherit; text-decoration:none; }
 .pod-title{ font-weight:650; font-size:14px; letter-spacing:.01em; }
 .pod-sub{ font-size:12px; color:var(--muted); margin-top:1px; }
 .rtip{ max-width:760px; margin:12px auto 0; padding:10px 14px; display:flex; align-items:flex-start; gap:10px; border:1px solid var(--line); border-radius:12px; background:var(--panel); font-size:12.5px; color:var(--muted); line-height:1.5; }
-.rtip b{ color:var(--ink); font-weight:600; }
-.rtip-x{ flex:0 0 auto; margin-left:auto; border:none; background:transparent; color:var(--muted); cursor:pointer; font-size:14px; padding:0 2px; }
+.rtip b{ color:var(--text); font-weight:600; }
+.rtip-x{ flex:0 0 auto; margin-left:auto; border:none; background:transparent; color:var(--muted); cursor:pointer; font-size:14px; padding:0 2px; position:relative; }
 .fil.on{ color:#15171b; font-weight:600; }
 .fil .cnt{ font-family:'JetBrains Mono',monospace; font-size:11px; opacity:.8; }
 
@@ -164,19 +177,21 @@ a{ color:inherit; text-decoration:none; }
 .down:hover{ color:var(--down); }
 .h{ font-family:'Bricolage Grotesque',sans-serif; font-weight:700; font-size:18px; line-height:1.22; margin:0 0 7px; letter-spacing:-.01em; }
 .h a:hover{ color:var(--amber); }
-.p{ margin:0 0 9px; font-size:14px; line-height:1.5; color:#cfcabd; }
+.p{ margin:0 0 9px; font-size:14px; line-height:1.5; color:var(--body); }
 /* "Why it matters" is a small "i" that uncollapses an inline section in the card
    (the card just grows — no clipping by .card overflow:hidden). */
-.why-i{ display:inline-flex; align-items:center; justify-content:center; width:17px; height:17px; border-radius:50%; border:1px solid var(--line); background:transparent; color:var(--faint); font-family:'JetBrains Mono',monospace; font-size:10px; font-style:italic; cursor:pointer; user-select:none; padding:0; }
+.why-i{ display:inline-flex; align-items:center; justify-content:center; min-width:17px; height:18px; border-radius:9px; border:1px solid var(--line); background:transparent; color:var(--faint); font-family:'JetBrains Mono',monospace; font-size:9.5px; font-style:italic; cursor:pointer; user-select:none; padding:0 8px; position:relative; }
+.why-i::after, .listen::after, .rtip-x::after{ content:""; position:absolute; inset:-11px; }   /* 44px-ish hit slop on daily-use controls */
 .why-i:hover, .why-i[aria-expanded="true"]{ color:var(--amber); border-color:var(--amber); }
 .why-pop{ margin:2px 0 10px; font-size:12.5px; line-height:1.45; color:var(--muted); border-top:1px dashed var(--line); padding-top:8px; }
 .why-pop[hidden]{ display:none; }
 .why-pop b{ font-family:'JetBrains Mono',monospace; font-size:9px; letter-spacing:.16em; text-transform:uppercase; color:var(--amber); margin-right:7px; font-weight:600; }
 .card-foot{ display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
-.type{ font-size:11px; color:var(--muted); border:1px solid var(--line); border-radius:6px; padding:1px 7px; }
+.type{ font-size:11px; color:var(--muted); border:1px solid var(--line); border-radius:6px; padding:1px 7px; background:transparent; cursor:pointer; font-family:'Inter',sans-serif; }
+.type:hover{ color:var(--down); border-color:var(--down); }
 .move{ font-family:'JetBrains Mono',monospace; font-size:12px; font-weight:700; }
 .src{ font-family:'JetBrains Mono',monospace; font-size:10.5px; color:var(--faint); }
-.listen{ margin-left:auto; flex-shrink:0; display:inline-flex; align-items:center; justify-content:center; width:26px; height:26px; border-radius:50%; border:1px solid var(--line); background:transparent; color:var(--muted); font-size:10px; cursor:pointer; padding:0; }
+.listen{ margin-left:auto; flex-shrink:0; display:inline-flex; align-items:center; justify-content:center; width:26px; height:26px; border-radius:50%; border:1px solid var(--line); background:transparent; color:var(--muted); font-size:10px; cursor:pointer; padding:0; position:relative; }
 .listen:hover, .listen.playing{ color:var(--amber); border-color:var(--amber); }
 .listen.loading{ opacity:.6; }
 
@@ -249,11 +264,16 @@ const state = {
   catalogue: null, picked: new Set(), deskIndex: {}, createOpen: false, createGroup: null, preview: null,
 };
 function markSetupDone(){ state.setupDone=true; try{ localStorage.setItem("jackwire:setup","1"); }catch(_){} }
-function profileCustomised(){ const d=state.profile.desks; return (d.disabled&&d.disabled.length)||(d.custom&&d.custom.length)||Object.keys(state.profile.weights||{}).length; }
+function profileCustomised(){ const d=state.profile.desks, p=state.profile;
+  return (d.disabled&&d.disabled.length)||(d.custom&&d.custom.length)||Object.keys(p.weights||{}).length
+    ||Object.keys(p.notes||{}).length||((p.deskOrder||[]).length); }
 
 const esc = s => String(s==null?"":s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 // Fallback "source" for items the routine didn't label: the URL's domain.
 const domainOf = u => { try { return new URL(String(u)).hostname.replace(/^www\./,""); } catch(_) { return ""; } };
+// Relative "on the wire since" age from addedAt (ingest time, the honest stamp we have).
+const relAge = iso => { const m=(Date.now()-Date.parse(iso))/60000; if(!isFinite(m)||m<0) return "";
+  if(m<60) return Math.max(1,Math.round(m))+"m ago"; const h=m/60; if(h<24) return Math.round(h)+"h ago"; return Math.round(h/24)+"d ago"; };
 const longDate = () => new Date().toLocaleDateString("en-GB",{weekday:"long",day:"numeric",month:"long",year:"numeric"});
 function londonHour(){ try{ return parseInt(new Intl.DateTimeFormat("en-GB",{timeZone:"Europe/London",hour:"2-digit",hour12:false}).format(new Date()),10)%24; }catch(_){ return new Date().getHours(); } }
 const greeting = () => { const h=londonHour(); return h<12?"Good morning":h<18?"Good afternoon":"Good evening"; };
@@ -432,8 +452,9 @@ function adoptServerProfile(sp){
 }
 async function loadServerProfile(){
   try{ const r = await fetch("/api/profile", { headers:{ "x-user-id": state.uid } }); const d = await r.json();
-    if(d && d.profile) adoptServerProfile(d.profile);
+    if(d && d.profile){ adoptServerProfile(d.profile); return true; }
   }catch(_){}
+  return false;
 }
 let _wt;
 function syncWeights(){ saveProfile(); clearTimeout(_wt); _wt = setTimeout(()=>putProfile(false), 1500); }
@@ -466,15 +487,20 @@ async function fetchData(force){
   const res = force
     ? await fetch("/api/refresh", { method:"POST", headers:{"content-type":"application/json"}, body: JSON.stringify({ userId: state.uid }) })
     : await fetch("/api/today", { headers:{ "x-user-id": state.uid } });
+  window.__lastFetch = Date.now();
   return res.json();
 }
-function applyData(data){ state.data = data; hydrateRead(data.date); if(data.items && data.items.length){ markSeen(); recordSeen(data.items); } }
+// NOTE: "seen" is recorded per-card as it scrolls into view (see wire()), NOT
+// here — recording the whole payload on fetch meant a five-second glance hid
+// the entire unread edition from the next visit.
+function applyData(data){ state.data = data; hydrateRead(data.date); if(data.items && data.items.length) markSeen(); }
 const isBuilding = d => d && d.generating && (!d.items || !d.items.length);
 // Keep polling while an empty build runs, OR while a rebuild we kicked off
 // (manual refresh, desk change) hasn't landed — i.e. generatedAt hasn't moved
 // past what we were showing when we asked. The old empty-feed-only check meant
 // Refresh and desk edits never actually delivered the new briefing.
-const shouldPoll = d => isBuilding(d) || (state.awaitGen != null && d && String(d.generatedAt||"") === state.awaitGen);
+const shouldPoll = d => isBuilding(d) || (d && d.generating && d.interim)
+  || (state.awaitGen != null && d && String(d.generatedAt||"") === state.awaitGen);
 
 // A routine refresh takes minutes to land, so lock the Refresh button for ~5 min
 // after a manual refresh (persisted, so a page reload doesn't bypass it).
@@ -505,7 +531,12 @@ async function poll(){
   // Bound the poll so a stuck/throttled build can't spin the loader forever.
   // A routine rebuild takes minutes, so back off to 10s after the first minute;
   // ~60 ticks ≈ 8½ min total, then show whatever's cached.
-  if ((window.__pollN = (window.__pollN || 0) + 1) > 60){ state.loading = false; state.awaitGen = null; render(); return; }
+  if ((window.__pollN = (window.__pollN || 0) + 1) > 60){
+    // Give up honestly: clear the generating/interim flags so the UI shows
+    // what's cached (or the desk report) instead of a stale "researching" state.
+    if(state.data){ state.data.generating = false; delete state.data.interim; }
+    state.loading = false; state.awaitGen = null; render(); return;
+  }
   const wait = state.cooldown ? 15000 : (window.__pollN > 15 ? 10000 : 4000);   // throttled fire → generatedAt can't move for minutes; poll gently
   try{
     const data = await fetchData(false);
@@ -528,23 +559,32 @@ async function poll(){
 // ---- swipe actions -------------------------------------------------------
 function swipeRight(it){
   bump(it.contentType, 1); bump("desk:"+it.category, .5);
-  state.read.add(it.id); addDismissed(it); saveRead(); syncWeights(); render();
+  state.read.add(it.id); addDismissed(it); saveRead(); syncWeights();
+  // One-time confirmation so the first right swipe teaches its consequence.
+  let first=false; try{ first=!localStorage.getItem("jackwire:swiped"); if(first) localStorage.setItem("jackwire:swiped","1"); }catch(_){}
+  if(first){ state.toast={msg:`Read ✓ — your ${cat(it.category).label} desk noted you like ${it.contentType}`}; clearTimeout(window.__tt); window.__tt=setTimeout(()=>{state.toast=null;render();},4200); }
+  render();
 }
 function swipeLeft(it){
+  const before = w()[it.contentType]||0;
   bump(it.contentType, -1.5); bump("desk:"+it.category, -.5);
   state.read.add(it.id); addDismissed(it); saveRead();
-  state.toast = { msg:`Less like “${it.contentType}”`, undo:{ id:it.id, it, type:it.contentType, cat:it.category, d:[1.5,.5] } };
-  clearTimeout(window.__tt); window.__tt = setTimeout(()=>{ state.toast=null; render(); }, 4200);
+  // Crossing the mute floor silently vanished a whole story type — say so.
+  const nowMuted = (w()[it.contentType]||0) <= MUTE_FLOOR && before > MUTE_FLOOR;
+  state.toast = { msg: nowMuted ? `Muted “${it.contentType}” — you won’t see these again` : `Less like “${it.contentType}”`,
+    undo:{ id:it.id, it, type:it.contentType, cat:it.category, d:[1.5,.5] } };
+  clearTimeout(window.__tt); window.__tt = setTimeout(()=>{ state.toast=null; render(); }, nowMuted ? 6000 : 4200);
   syncWeights(); render();
 }
 function undo(){
   const u = state.toast && state.toast.undo; if(!u) return;
+  if(u.restore){ restoreType(u.restore); return; }   // mute-chip undo: just unmute
   state.read.delete(u.id); if(u.it) undoDismissed(u.it); bump(u.type, u.d[0]); bump("desk:"+u.cat, u.d[1]);
   state.toast = null; saveRead(); syncWeights(); render();
 }
 function muteType(t){
   w()[t] = MUTE_FLOOR - 1;
-  state.toast = { msg:`Muted “${t}”`, undo:{ id:null, type:t, cat:null, d:[0] }, restore:t };
+  state.toast = { msg:`Muted “${t}” — restore any time in ⚙`, undo:{ restore:t } };
   clearTimeout(window.__tt); window.__tt = setTimeout(()=>{ state.toast=null; render(); }, 4200);
   syncWeights(); render();
 }
@@ -554,8 +594,11 @@ function mutedTypes(){ return Object.keys(w()).filter(k=>!k.startsWith("desk:") 
 // ---- desk management -----------------------------------------------------
 function toggleBuiltin(id){
   const dis = state.profile.desks.disabled;
-  state.profile.desks.disabled = dis.includes(id) ? dis.filter(x=>x!==id) : [...dis, id];
-  syncDesks();
+  const disabling = !dis.includes(id);
+  state.profile.desks.disabled = disabling ? [...dis, id] : dis.filter(x=>x!==id);
+  if(disabling && state.filter===id) state.filter="all";   // don't strand the feed on a hidden desk's filter
+  if(disabling){ saveProfile(); putProfile(false); render(); }   // hiding is instant + client-side; no rebuild needed
+  else syncDesks();                                              // enabling needs the desk researched
 }
 function addCustomDesk(label, topic, voice){
   topic = (topic||"").trim(); label = (label||"").trim() || topic.slice(0,28);
@@ -568,36 +611,44 @@ function addCustomDesk(label, topic, voice){
 }
 function removeCustomDesk(id){
   state.profile.desks.custom = state.profile.desks.custom.filter(d=>d.id!==id);
+  if(state.filter===id) state.filter="all";
   syncDesks();
 }
 
 // ---- onboarding picker ---------------------------------------------------
 async function loadCatalogue(){
   try{ const r = await fetch("/api/catalogue"); state.catalogue = await r.json(); }
-  catch(_){ state.catalogue = { groups: [], location: null }; }
+  catch(_){ state.catalogue = { groups: [], location: null, error: true }; }
   indexCatalogue();
 }
 function indexCatalogue(){
+  const prev = state.deskIndex || {};
   state.deskIndex = {}; const c = state.catalogue; if(!c) return;
   (c.groups||[]).forEach(g=>g.desks.forEach(d=> state.deskIndex[d.id]=d));
   if(c.location) state.deskIndex[c.location.id]=c.location;
+  // Keep user-designed desks across catalogue refetches — they only exist here.
+  for(const id in prev){ if(!state.deskIndex[id] && state.picked.has(id)) state.deskIndex[id]=prev[id]; }
 }
 function pickAccent(d){ return (d.builtin && CATS[d.id]) ? CATS[d.id].accent : (d.location ? "var(--amber)" : cat(d.id).accent); }
 function pickCard(d){
   const on = state.picked.has(d.id);
-  const persona = (d.builtin && CATS[d.id]) ? CATS[d.id].persona : (d.location ? "Local desk" : "New desk");
+  const needsAuth = !d.builtin && state.auth.enabled && !state.auth.signedIn;
+  const persona = (d.builtin && CATS[d.id]) ? CATS[d.id].persona
+    : (d.location ? "Local desk" : "New desk") + (needsAuth ? " · sign in to keep" : "");
   const p = d.pitch;
   return `<button class="pick ${on?'on':''} ${d.location?'pick-local':''}" data-pick="${esc(d.id)}" style="--ac:${pickAccent(d)}">
     <div class="pick-top"><span class="pick-name">${esc(d.label)}</span><span class="pick-check">${on?'✓':'+'}</span></div>
     <div class="pick-persona">${esc(persona)}</div>
-    ${p ? `<div class="pick-pitch"><span class="pick-h">${esc(p.title)}</span>${p.source?` <span class="pick-src">${esc(p.source)}</span>`:''}</div>`
-        : `<div class="pick-pitch pick-quiet">finding the latest…</div>`}
+    ${p ? `<div class="pick-pitch"><span class="pick-h">${esc(p.title)}</span>${p.source?` <span class="pick-src">${esc(p.source)}</span>`:''}${p.blurb?`<div class="hint" style="margin-top:3px">${esc(p.blurb)}</div>`:''}</div>`
+        : `<div class="pick-pitch pick-quiet">first stories arriving…</div>`}
   </button>`;
 }
 function previewHtml(){
   const pv = state.preview; if(!pv) return "";
   if(pv.loading) return `<div class="hint" style="margin-top:12px">Designing your desk and fetching a sample story…</div>`;
-  if(pv.error) return `<div class="hint" style="margin-top:12px; color:var(--down)">${esc(pv.error)}</div>`;
+  if(pv.error) return `<div class="hint" style="margin-top:12px; color:var(--down)">${esc(pv.error)}</div>
+    ${(!state.auth.signedIn && state.auth.enabled) ? `<a class="apple-btn" href="/auth/apple/login?u=${encodeURIComponent(state.uid)}"> Sign in with Apple</a>` : ""}`;
+  if(pv.added) return `<div class="preview-card"><div class="pick-name">✓ ${esc((pv.data&&pv.data.label)||pv.topic)} added to your wire</div></div>`;
   const d = pv.data;
   return `<div class="preview-card">
     <div class="pick-name">${esc(d.label||pv.topic)}</div>
@@ -612,7 +663,22 @@ function previewHtml(){
 function renderPicker(){
   const app = document.getElementById("app");
   const c = state.catalogue;
-  if(!c){ app.innerHTML = `<div class="setup"><div class="setup-head"><div class="eyebrow">Build your wire</div><h1>${greeting()}.</h1><p>Loading desks…</p></div><div class="skeletons" style="margin-top:18px">${"<div class='sk'></div>".repeat(4)}</div></div>`; return; }
+  // Preserve a half-typed custom-desk topic across re-renders (every tap
+  // re-renders the picker; losing the draft made "reword it" mean "retype it").
+  const draftEl = document.getElementById("setup-topic");
+  if(draftEl) state.draftTopic = draftEl.value;
+  const skipFoot = `<div class="setup-foot"><button class="linkbtn" id="setup-skip">Skip — read today’s edition</button>${(state.auth.enabled && !state.auth.signedIn)?`<a class="linkbtn" href="/auth/apple/login?u=${encodeURIComponent(state.uid)}">Sign in</a>`:""}</div>`;
+  const wireSkip = ()=>{ const sk=document.getElementById("setup-skip"); if(sk) sk.onclick=()=>{ markSetupDone(); state.createOpen=false; render(); load(false); }; };
+  if(!c){
+    app.innerHTML = `<div class="setup"><div class="setup-head"><div class="eyebrow">The Wire · Build your wire</div><h1>${greeting()}. Your own news desk.</h1><p>Fresh news researched for you three times a day — British English, £, no ads, with a daily podcast. Fetching today’s desks…</p></div><div class="skeletons" style="margin-top:18px">${"<div class='sk'></div>".repeat(4)}</div></div>${skipFoot}`;
+    wireSkip(); return;
+  }
+  if(c.error && !(c.groups||[]).length){
+    app.innerHTML = `<div class="setup"><div class="setup-head"><div class="eyebrow">The Wire · Build your wire</div><h1>${greeting()}.</h1><p>Couldn’t load the desk catalogue — you can retry, or skip straight to today’s edition.</p></div><div class="row" style="margin-top:14px"><button class="refresh" id="setup-retry">Try again</button></div></div>${skipFoot}`;
+    const rt=document.getElementById("setup-retry");
+    if(rt) rt.onclick=()=>{ state.catalogue=null; renderPicker(); loadCatalogue().then(renderPicker); };
+    wireSkip(); return;
+  }
   const n = state.picked.size;
   const groupHint = {
     "Sport": "Your team or sport — e.g. ‘Arsenal’, ‘Leeds United’, ‘UFC’",
@@ -622,7 +688,7 @@ function renderPicker(){
     "News": "e.g. ‘your local council’, ‘immigration’, ‘elections’",
   };
   const createBox = name => `<div class="create-box">
-      <input id="setup-topic" maxlength="120" placeholder="${esc(groupHint[name]||'Any topic — e.g. ‘baking’, ‘climate tech’')}" />
+      <input id="setup-topic" maxlength="120" value="${esc(state.draftTopic||'')}" placeholder="${esc(groupHint[name]||'Any topic — e.g. ‘baking’, ‘climate tech’')}" />
       <div class="row" style="margin-top:9px"><button class="minibtn" id="setup-preview">See it</button><button class="linkbtn" id="setup-create-cancel">Cancel</button></div>
       ${previewHtml()}
     </div>`;
@@ -635,17 +701,25 @@ function renderPicker(){
   app.innerHTML = `
     <div class="setup">
       <div class="setup-head">
-        <div class="eyebrow">Build your wire</div>
-        <h1>${greeting()}. Let’s build your wire.</h1>
-        <p>Tap the desks you want — each is auditioning with its best story right now. See your team or topic missing? <strong style="color:var(--amber)">Add your own</strong> in any section and watch it design itself.</p>
+        <div class="eyebrow">The Wire · Build your wire</div>
+        <h1>${greeting()}. Your own news desk.</h1>
+        <p>The Wire researches the topics you pick, three times a day — British English, £, no ads, with a daily podcast. Tap the desks you want; each is auditioning with its best story right now. Missing your team or topic? <strong style="color:var(--amber)">Add your own</strong> and watch it design itself. You can change desks any time in ⚙.</p>
       </div>
       ${loc}${groups}
     </div>
     <div class="setup-foot">
       <button class="refresh" id="setup-go" ${n?'':'disabled'}>${n?`Start reading · ${n} desk${n>1?'s':''}`:'Pick some desks'}</button>
-      <button class="linkbtn" id="setup-skip">Skip</button>
+      <button class="linkbtn" id="setup-skip">Skip — read today’s edition</button>
+      ${(state.auth.enabled && !state.auth.signedIn)?`<a class="linkbtn" href="/auth/apple/login?u=${encodeURIComponent(state.uid)}">Sign in</a>`:""}
     </div>`;
   wirePicker();
+  // Late pitches: the server fills missing ones AFTER responding, so tiles can
+  // sit on the placeholder — refetch a couple of times and patch them in.
+  const anyMissing = (c.groups||[]).some(g=>g.desks.some(d=>!d.pitch)) || (c.location && !c.location.pitch);
+  if(anyMissing && (window.__pitchPolls||0) < 2 && !state.setupDone){
+    window.__pitchPolls = (window.__pitchPolls||0) + 1;
+    setTimeout(()=>{ if(!state.setupDone) loadCatalogue().then(()=>{ if(!state.setupDone && !state.createOpen) renderPicker(); }); }, window.__pitchPolls===1 ? 8000 : 25000);
+  }
 }
 function wirePicker(){
   const $ = s => document.getElementById(s);
@@ -657,12 +731,15 @@ function wirePicker(){
   });
   $("setup-create-cancel") && ($("setup-create-cancel").onclick = ()=>{ state.createOpen=false; state.createGroup=null; state.preview=null; renderPicker(); });
   $("setup-preview") && ($("setup-preview").onclick = ()=> runPreview(($("setup-topic")||{}).value));
+  const st = $("setup-topic");
+  if(st){ st.oninput = ()=>{ state.draftTopic = st.value; }; st.onkeydown = e=>{ if(e.key==="Enter") runPreview(st.value); }; }
   $("setup-add") && ($("setup-add").onclick = ()=> addPreviewed());
   $("setup-skip") && ($("setup-skip").onclick = ()=>{ markSetupDone(); state.createOpen=false; render(); load(false); });
   $("setup-go") && ($("setup-go").onclick = ()=> finishSetup());
 }
 async function runPreview(topic){
   topic = (topic||"").trim(); if(!topic) return;
+  if(state.preview && state.preview.loading) return;   // one design call at a time
   if(!state.auth.signedIn){ state.preview = { topic, error:"Sign in with Apple to design and keep your own desks." }; renderPicker(); return; }
   state.preview = { topic, loading:true }; renderPicker();
   try{
@@ -679,19 +756,36 @@ function addPreviewed(){
   const personaName = (pv.data.persona||"").split("·")[0].trim() || pv.data.label;
   const desk = { id, label: pv.data.label || pv.topic, topic: pv.topic, voice: pv.data.voice||"", voiceName: personaName, types: Array.isArray(pv.data.types)?pv.data.types:[] };
   state.deskIndex[id] = desk; state.picked.add(id);
-  state.createOpen=false; state.createGroup=null; state.preview=null; renderPicker();
+  // Confirm visibly before closing — an instantly-vanishing box read as "nothing happened".
+  pv.added = true; state.draftTopic = "";
+  const el = document.getElementById("setup-topic"); if(el) el.value = "";   // else renderPicker re-captures the old draft
+  renderPicker();
+  setTimeout(()=>{ if(state.preview===pv){ state.createOpen=false; state.createGroup=null; state.preview=null; renderPicker(); } }, 1400);
 }
 function finishSetup(){
   const picked = [...state.picked].map(id=>state.deskIndex[id]).filter(Boolean);
-  const builtinPicked = picked.filter(d=>d.builtin).map(d=>d.id);
-  const disabled = BUILTIN_ORDER.filter(id=>!builtinPicked.includes(id));
-  const custom = picked.filter(d=>!d.builtin).map(d=>({
+  let builtinPicked = picked.filter(d=>d.builtin).map(d=>d.id);
+  let custom = picked.filter(d=>!d.builtin).map(d=>({
     id: d.id, label: d.label, topic: d.topic||d.label, voice: d.voice||"", voiceName: d.voiceName||d.label, types: Array.isArray(d.types)?d.types:[],
   }));
-  state.profile = { desks:{ disabled, custom }, weights:{} };
+  // Custom desks are researched per ACCOUNT — signed out, they would never get
+  // a single story. Keep the built-in picks and say so, and never finish into
+  // a wire with every desk disabled (a permanently empty feed).
+  if(!state.auth.signedIn && custom.length){
+    custom = [];
+    state.toast = { msg:"Custom desks need Apple sign-in — kept your built-in picks. Sign in via ⚙ to add the rest." };
+    clearTimeout(window.__tt); window.__tt=setTimeout(()=>{state.toast=null;render();},5200);
+  }
+  if(!builtinPicked.length && !custom.length) builtinPicked = BUILTIN_ORDER.slice();
+  const disabled = BUILTIN_ORDER.filter(id=>!builtinPicked.includes(id));
+  // Merge, don't replace: re-running setup must not destroy learned weights,
+  // desk notes, or a saved pill order.
+  state.profile = { desks:{ disabled, custom },
+    weights: state.profile.weights||{}, notes: state.profile.notes||{}, deskOrder: state.profile.deskOrder||[] };
   saveProfile(); markSetupDone(); state.createOpen=false;
+  state.armNext = !!state.auth.signedIn;   // poll until the first personalised build lands
   render();                          // switch to the feed (building state)
-  putProfile(true).then(()=> load(false));
+  putProfile(true).then(ok=>{ if(!ok){ state.armNext=false; state.awaitGen=null; } load(false); });
 }
 
 // ---- render --------------------------------------------------------------
@@ -709,11 +803,13 @@ function render(){
   const cooldownNote = state.cooldown != null
     ? `Updating shortly — on cooldown${state.cooldown > 60 ? ` (~${Math.ceil(state.cooldown/60)} min)` : ""}.`
     : null;
+  const interim = state.data && state.data.interim === "shared";
   const sumLine = cooldownNote ? cooldownNote
+    : interim ? "Researching your personal wire — here's today's shared edition meanwhile…"
     : building ? "Building your briefing — researching every desk live. This can take several minutes…"
     : state.loading ? "Updating your briefing…"
     : total ? ""
-    : "Nothing in the tray yet.";
+    : "Nothing on the wire yet.";
 
   const filterBtns = [`<button class="fil ${state.filter==="all"?"on":""}" style="${state.filter==="all"?"background:var(--amber);border-color:var(--amber)":""}" data-filter="all">All <span class="cnt">${total}</span></button>`]
     .concat(order.map(k=>{
@@ -731,8 +827,10 @@ function render(){
   } else if((state.loading||building) && !items.length){
     feedHtml = `<div class="skeletons">${"<div class='sk'></div>".repeat(4)}</div>`;
   } else if(items.length===0 && state.data && state.data.items && state.data.items.length){
+    const rest = state.filter!=="all" ? baseItems().length : 0;
     feedHtml = `<div class="empty"><div class="empty-h">All caught up.</div>
-      <p class="empty-p">You’ve been through everything under this filter. Try “All”, add a desk, or hit refresh for a new pull.</p></div>`;
+      <p class="empty-p">${rest?`You’ve read everything on this desk.`:`You’ve read everything for now — more arrives with the next edition.`}</p>
+      ${rest?`<button class="refresh" data-filter="all">Show all desks · ${rest} waiting</button>`:""}</div>`;
   } else if(items.length===0){
     feedHtml = `<div class="empty"><div class="empty-h">Nothing here yet.</div>
       <p class="empty-p">${esc(sumLine)}</p>${deskReport(report)}</div>`;
@@ -748,20 +846,25 @@ function render(){
         <div class="sw nope">◂ Not for me</div>
         <div class="card-top">
           <span class="cat" style="color:${ac}">${esc(info.label)}</span>
-          ${it.why?`<button class="why-i" type="button" aria-expanded="false" aria-label="Why it matters">i</button>`:""}
+          ${it.why?`<button class="why-i" type="button" aria-expanded="false" aria-label="Why it matters">why</button>`:""}
           ${isNew(it)?`<span class="new-pill">NEW</span>`:""}
         </div>
         <h3 class="h">${titleHtml}</h3>
         ${it.summary?`<p class="p">${esc(it.summary)}</p>`:""}
         ${it.why?`<div class="why-pop" hidden><b>Why it matters</b>${esc(it.why)}</div>`:""}
         <div class="card-foot">
-          <span class="type">${esc(it.contentType)}</span>
+          <button class="type" type="button" data-mute="${esc(it.contentType)}" title="Mute this story type">${esc(it.contentType)}</button>
           ${it.changePct?`<span class="move" style="color:${dirCol}">${arrow} ${esc(it.changePct)}</span>`:""}
           <span class="src">${esc(it.source || domainOf(it.url) || "—")}</span>
+          ${it.addedAt?`<span class="src">${relAge(it.addedAt)}</span>`:""}
           <button class="listen" data-listen="${esc(it.id)}" type="button" aria-label="Listen to this">▶</button>
         </div>
       </article>`;
     }).join("");
+
+    if(items.length > 2){
+      feedHtml += `<div style="text-align:center;margin-top:2px"><button class="linkbtn" id="markall">Mark all ${items.length} as read</button></div>`;
+    }
 
     if(report && order.some(k=>report[k] && report[k].status!=="ok")){
       feedHtml += `<details style="background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:10px 14px">
@@ -775,7 +878,7 @@ function render(){
       <div class="set-row"><span class="set-label">Desks</span><div class="set-body">
         ${allDesksOrdered().map(id=>deskRowHtml(id, BUILTIN_ORDER.includes(id))).join("")}
         <div class="hint">Each desk shows its personality and how it’s currently leaning, based on what you swipe. Toggle a desk on/off or remove a custom one — changes rebuild your briefing.</div>
-        ${state.showAddDesk ? `
+        ${state.showAddDesk ? (state.auth.signedIn ? `
           <div class="dform">
             <input id="d-label" maxlength="40" placeholder="Desk name (e.g. Formula 1, AI research, Cycling)" />
             <textarea id="d-topic" maxlength="200" placeholder="What should this desk cover? Be specific — e.g. 'Formula 1: race results, driver moves, regulation and team news'"></textarea>
@@ -783,7 +886,12 @@ function render(){
               <button class="minibtn" id="d-add">Add desk</button>
               <button class="linkbtn" id="d-cancel">Cancel</button>
             </div>
-          </div>` : `<div class="row" style="margin-top:10px"><button class="linkbtn" id="d-new">＋ New desk</button></div>`}
+          </div>` : `
+          <div class="dform">
+            <div class="hint">Custom desks are designed and kept with your Apple account — sign in and they sync everywhere.</div>
+            ${state.auth.enabled?`<a class="apple-btn" href="/auth/apple/login?u=${encodeURIComponent(state.uid)}"> Sign in with Apple</a>`:`<div class="hint">Sign-in isn’t configured on this deployment.</div>`}
+            <div class="row"><button class="linkbtn" id="d-cancel">Cancel</button></div>
+          </div>`) : `<div class="row" style="margin-top:10px"><button class="linkbtn" id="d-new">＋ New desk</button></div>`}
       </div></div>
       <div class="set-row"><span class="set-label">Muted types</span><div class="set-body"><div class="chips">
         ${mutedTypes().length===0?`<span class="set-empty">None muted. Keep swiping a kind of story left and it gets muted automatically.</span>`:""}
@@ -821,12 +929,12 @@ function render(){
 
   app.innerHTML = `
     <header class="mast">
-      <div class="mast-l"><div class="eyebrow">Personal edition · UK</div><h1 class="title">THE WIRE</h1></div>
+      <div class="mast-l"><div class="eyebrow">${state.auth.name?esc(state.auth.name.split(" ")[0]+"’s edition · UK"):"Personal edition · UK"}</div><h1 class="title">THE WIRE</h1></div>
       <div class="mast-r"><div class="date">${longDate()}</div>
         <div class="mast-btns">
           <button class="icbtn" id="theme" aria-label="Toggle dark/light">${curTheme()==="dark"?"☀":"☾"}</button>
           <button class="icbtn" id="cog" aria-label="Settings">⚙</button>
-          <button class="refresh" id="refresh" ${(state.loading||refreshLockMsLeft()>0)?"disabled":""}>${refreshLockMsLeft()>0?"Refreshing…":(state.loading?"Pulling…":"Refresh")}</button>
+          <button class="refresh" id="refresh" ${(state.loading||refreshLockMsLeft()>0)?"disabled":""}>${state.awaitGen!=null?"Refreshing…":(refreshLockMsLeft()>0?`Fresh · ${Math.ceil(refreshLockMsLeft()/60000)}m`:(state.loading?"Pulling…":"Refresh"))}</button>
         </div></div>
     </header>
     ${settingsHtml}
@@ -836,10 +944,12 @@ function render(){
       <button class="pod-play" id="podplay" type="button" aria-label="Play today's podcast">▶</button>
       <div class="pod-meta"><div class="pod-title">The latest on The Wire</div><div class="pod-sub" id="podsub">The day's news, talked through</div></div>
     </section>
-    ${(()=>{ let seen=true; try{ seen=!!localStorage.getItem("jackwire:readertip"); }catch(_){}; return seen?"":`<div class="rtip" id="rtip"><div>Tip: tap a headline to open the story in Safari, then tap <b>aA</b> in the address bar and choose <b>Use Reader Automatically</b>. Safari will open that site's articles in Reader from then on.</div><button class="rtip-x" id="rtip-x" aria-label="Dismiss">✕</button></div>`; })()}
+    ${(()=>{ let seen=true; try{ seen=!!localStorage.getItem("jackwire:readertip"); }catch(_){};
+      const ua=navigator.userAgent, safari=/safari/i.test(ua) && !/chrome|crios|fxios|edg|android/i.test(ua);
+      return (seen||!safari)?"":`<div class="rtip" id="rtip"><div>Tip: open a headline, tap <b>aA</b> → <b>Use Reader Automatically</b>. Clean reading — one and done.</div><button class="rtip-x" id="rtip-x" aria-label="Dismiss">✕</button></div>`; })()}
     <main class="feed">${onboardHtml}${feedHtml}</main>
     <footer class="foot">British English, £, no ads, no comment columns. Your desks, each with its own voice — swipe to tune them. Refreshed through the day, newest at the top.${pulled}</footer>
-    ${state.toast?`<div class="toast"><span>${esc(state.toast.msg)}</span><button id="undo">Undo</button></div>`:""}
+    ${state.toast?`<div class="toast"><span>${esc(state.toast.msg)}</span>${state.toast.undo?`<button id="undo">Undo</button>`:""}</div>`:""}
   `;
   wire();
 }
@@ -896,9 +1006,14 @@ function syncListenUI(){
 function toggleListen(id){
   if(_audio && _audioId===id){ _audio.paused ? _audio.play() : _audio.pause(); syncListenUI(); return; }
   if(_audio){ try{ _audio.pause(); }catch(_){} }
+  if(_pod && !_pod.paused){ try{ _pod.pause(); }catch(_){} syncPod(); }   // one player at a time
   _audio = new Audio(`/api/listen/${encodeURIComponent(id)}?u=${encodeURIComponent(state.uid)}`);
   _audioId = id;
   ["playing","pause","ended","error","waiting","canplay","loadstart"].forEach(ev=> _audio.addEventListener(ev, syncListenUI));
+  _audio.addEventListener("error", ()=>{   // was silent: tap → spinner → back to ▶ with no explanation
+    state.toast={msg:"Couldn’t play that one — the feed may have refreshed."};
+    clearTimeout(window.__tt); window.__tt=setTimeout(()=>{state.toast=null;render();},3500); render();
+  });
   _audio.play().catch(()=> syncListenUI());
   syncListenUI();
 }
@@ -919,6 +1034,7 @@ function syncPod(){
 }
 function podPlayNext(){
   if(_podI >= _podQ.length){ _pod=null; const s=document.getElementById("podsub"); if(s) s.textContent="The day's news, talked through"; syncPod(); return; }
+  if(_audio && !_audio.paused){ try{ _audio.pause(); }catch(_){} syncListenUI(); }   // one player at a time
   const track=_podQ[_podI];
   _podBusy=false;
   _pod=new Audio(track.url);
@@ -1030,6 +1146,27 @@ function wire(){
     });
   }
   document.querySelectorAll("[data-restore]").forEach(b=> b.onclick = ()=> restoreType(b.dataset.restore));
+  $("markall") && ($("markall").onclick = ()=>{
+    visibleItems().forEach(it=>{ state.read.add(it.id); addDismissed(it); });
+    saveRead(); render();
+  });
+
+  // Record "seen" only when a card is actually on screen — items below the
+  // fold stay unseen and survive to the next visit.
+  if(window.__seenObs) window.__seenObs.disconnect();
+  if("IntersectionObserver" in window){
+    window.__seenObs = new IntersectionObserver(ents=>{
+      const seen=[];
+      for(const en of ents){
+        if(!en.isIntersecting) continue;
+        const it = state.data && state.data.items && state.data.items.find(x=>x.id===en.target.dataset.id);
+        if(it) seen.push(it);
+        window.__seenObs.unobserve(en.target);
+      }
+      if(seen.length) recordSeen(seen);
+    }, { threshold: 0.6 });
+    document.querySelectorAll(".card[data-id]").forEach(c=> window.__seenObs.observe(c));
+  } else if(state.data && state.data.items){ recordSeen(visibleItems()); }
 
   document.querySelectorAll(".card[data-id], .card[data-onboard]").forEach(card=>{
     const id = card.dataset.id;
@@ -1078,19 +1215,38 @@ function toggleTheme(){ const t = curTheme()==="dark"?"light":"dark"; try{ local
 async function init(){
   applyTheme(curTheme());
   render();
+  // Catalogue and auth in parallel — a first-time visitor shouldn't wait on
+  // /api/me before the picker can even start loading.
+  const catP = state.setupDone ? null : loadCatalogue();
   await fetchMe();
-  if(state.auth.signedIn) await loadServerProfile();      // adopt the synced profile
+  let adopted = false;
+  if(state.auth.signedIn) adopted = await loadServerProfile();   // adopt the synced profile
+  // First sign-in with local tuning but no server profile yet: carry the local
+  // wire onto the account and start the personalised build now — previously
+  // this waited silently for some later swipe to sync.
+  if(state.auth.signedIn && !adopted && profileCustomised()){
+    state.armNext = true;
+    putProfile(true);
+    state.toast = { msg:"Your desks and everything you've taught your wire are now on your account." };
+    clearTimeout(window.__tt); window.__tt=setTimeout(()=>{state.toast=null;render();},5200);
+  }
   // Anyone who already has a built/tuned wire skips onboarding (existing users).
   if(profileCustomised()) markSetupDone();
   if(!state.setupDone){
     render();                 // shows the picker's loading state
-    await loadCatalogue();
+    if(catP) await catP;
     render();                 // shows the picker with pitches
     return;
   }
   render();
   load(false);
 }
+// Coming back to the tab/PWA after a while: quietly pull the latest edition
+// (nothing refetched on foregrounding before, so the 1pm return read 8am news).
+document.addEventListener("visibilitychange", ()=>{
+  if(document.visibilityState!=="visible" || !state.setupDone || state.loading) return;
+  if(Date.now() - (window.__lastFetch||0) > 10*60*1000) load(false);
+});
 init();
 </script>
 </body>
