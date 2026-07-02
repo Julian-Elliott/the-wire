@@ -147,7 +147,9 @@ a{ color:inherit; text-decoration:none; }
 .pod-main{ display:flex; align-items:center; gap:13px; }
 .pod-prog{ display:flex; align-items:center; gap:8px; margin-top:9px; }
 .pod-time{ font-family:'JetBrains Mono',monospace; font-size:10.5px; color:var(--muted); min-width:34px; text-align:center; }
-#podseek{ flex:1; accent-color:var(--amber); height:4px; }
+#podseek{ flex:1; accent-color:var(--amber); height:4px; min-width:0; }
+.pod-ctl{ width:30px; height:30px; flex:0 0 auto; border-radius:50%; border:1px solid var(--line); background:transparent; color:var(--muted); display:inline-flex; align-items:center; justify-content:center; padding:0; cursor:pointer; }
+.pod-ctl:hover{ color:var(--amber); border-color:var(--amber); }
 .pod-play{ flex:0 0 auto; width:42px; height:42px; border-radius:50%; border:none; background:var(--amber); color:#1a1206; font-size:15px; cursor:pointer; display:flex; align-items:center; justify-content:center; }
 .pod-play.loading{ opacity:.65; }
 .pod-meta{ min-width:0; }
@@ -1166,17 +1168,21 @@ function render(){
       <button class="pod-play" id="podplay" type="button" aria-label="Play today's podcast">▶</button>
       <div class="pod-meta"><div class="pod-title">The latest on The Wire</div><div class="pod-sub" id="podsub">The day's news, talked through</div></div>
       <span style="margin-left:auto;display:inline-flex;gap:8px;align-items:center;flex:0 0 auto">
-        <button class="icbtn" id="podrestart" type="button" aria-label="Restart episode" title="Restart" style="display:none">⟲</button>
-        <button class="icbtn" id="podback" type="button" aria-label="Back 15 seconds" title="Back 15s" style="display:none;font-size:10.5px">↺15</button>
         <a class="icbtn" id="poddl" href="/api/podcast/today?download=1" aria-label="Download today's episode" title="Download for offline"
            style="display:${window.__podReady?"inline-flex":"none"};align-items:center;justify-content:center;text-decoration:none">⬇</a>
       </span>
       </div>
       <div class="pod-prog" id="podprog" style="display:none">
+        <button class="pod-ctl" id="podrestart" type="button" aria-label="Restart episode" title="Restart">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><polygon points="19 20 9 12 19 4"/><line x1="5" y1="19" x2="5" y2="5"/></svg>
+        </button>
+        <button class="pod-ctl" id="podback" type="button" aria-label="Back 15 seconds" title="Back 15s">
+          <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><text x="12.4" y="16" text-anchor="middle" font-size="7.5" font-weight="700" fill="currentColor" stroke="none" font-family="'Inter',sans-serif">15</text></svg>
+        </button>
         <span class="pod-time" id="podcur">0:00</span>
         <input type="range" id="podseek" min="0" max="1000" value="0" step="1" aria-label="Seek">
         <span class="pod-time" id="poddur">–:––</span>
-        <button class="icbtn" id="podrate" type="button" aria-label="Playback speed" style="width:auto;padding:0 9px;font-size:11px">${(window.__podRate||1)}×</button>
+        <button class="pod-ctl" id="podrate" type="button" aria-label="Playback speed" style="width:auto;border-radius:999px;padding:0 11px;font-family:'JetBrains Mono',monospace;font-size:11px">${(window.__podRate||1)}×</button>
       </div>
     </section>
     ${(()=>{ let seen=true; try{ seen=!!localStorage.getItem("jackwire:readertip"); }catch(_){};
@@ -1291,9 +1297,6 @@ function syncPod(){
   const b=document.getElementById("podplay"); if(!b) return;
   const playing=!!(_pod && !_pod.paused && !_pod.ended);
   const loading=_podBusy || !!(_pod && !_pod.paused && _pod.readyState<3 && !_pod.ended);
-  // Transport controls only make sense while a track is loaded (not mid-render).
-  const showCtl = !!_pod && !_podBusy;
-  ["podback","podrestart"].forEach(id=>{ const el=document.getElementById(id); if(el) el.style.display = showCtl ? "inline-flex" : "none"; });
   b.classList.toggle("loading",loading);
   b.textContent = loading ? "…" : (playing ? "⏸" : "▶");
 }
