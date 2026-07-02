@@ -270,6 +270,18 @@ function extractJSON(text) {
 let _idc = 0;
 const uid = () => `i${Date.now()}_${_idc++}`;
 
+// Only real web links reach an <a href>: anything not http(s) (javascript:,
+// data:, etc.) is dropped at the door, on every path that stores an item url.
+// Scheme-less near-misses ("www.bbc.co.uk/…", "//host/…") are upgraded rather
+// than blanked — they feed dedup keys and the recency gate, not just the link.
+function httpUrl(u) {
+  const s = String(u == null ? "" : u).trim();
+  if (/^https?:\/\//i.test(s)) return s;
+  if (/^\/\/[^\/]/.test(s)) return "https:" + s;
+  if (/^www\.[^\s\/]+\.[^\s]/i.test(s)) return "https://" + s;
+  return "";
+}
+
 function normalize(items, desk) {
   return (items || [])
     .filter(x => x && x.title && x.title !== "__fixture__")
@@ -280,7 +292,7 @@ function normalize(items, desk) {
       why: x.why ? String(x.why) : "",
       contentType: x.contentType ? String(x.contentType) : desk.types[0],
       source: x.source ? String(x.source) : "",
-      url: x.url ? String(x.url) : "",
+      url: httpUrl(x.url),
       direction: x.direction || null,
       changePct: x.changePct || null,
     }));
@@ -698,13 +710,25 @@ async function fireRoutine(env, opts) {
       const since = nowSec - last;
       if (last && since < minInterval) return { ok: true, throttled: true, retryInSec: minInterval - since };
     }
+    // Hard daily ceiling on ON-DEMAND fires: the interval throttle alone still
+    // allowed ~96 anonymous fires a day against a routine run cap of 5–15.
+    // Only fires that actually STARTED count (incremented on success below), so
+    // a failing endpoint can't burn the budget; the cron passes noDailyCap —
+    // it is the controlled scheduler and already bounded per run.
+    if (!opts.noDailyCap) {
+      const used = Number(await env.WIRE_KV.get(`routine:fires:${londonDate()}`)) || 0;
+      if (used >= Number(env.ROUTINE_FIRE_DAILY_MAX || 15)) return { ok: true, throttled: true, retryInSec: 3600 };
+    }
     // Claim the slots BEFORE firing so two near-simultaneous callers don't both
     // pass and double-fire. KV has no compare-and-set, so a sub-second race
     // remains — acceptable here. Rolled back below if the fire itself fails.
     for (const k of keys) await env.WIRE_KV.put(k, String(nowSec), { expirationTtl: 86400 });
   }
   const releaseSlot = async () => { if (env.WIRE_KV) for (const k of keys) { try { await env.WIRE_KV.delete(k); } catch (_) {} } };
-  const text = opts.text || `On-demand shared-feed refresh at ${new Date().toISOString()}. Re-run the briefing and POST it to /api/ingest.`;
+  // opts.text may be a thunk so an expensive fire text (KV reads, prompt build)
+  // is only assembled once the throttles above have passed.
+  const text = (typeof opts.text === "function" ? await opts.text() : opts.text)
+    || `On-demand shared-feed refresh at ${new Date().toISOString()}. Re-run the briefing and POST it to /api/ingest.`;
   let res;
   try {
     res = await fetch(env.ROUTINE_FIRE_URL, {
@@ -720,6 +744,13 @@ async function fireRoutine(env, opts) {
   } catch (e) { await releaseSlot(); return { ok: false, error: "network error" }; }
   let data = {}; try { data = await res.json(); } catch (_) {}
   if (!res.ok) { await releaseSlot(); return { ok: false, error: (data && data.error && data.error.message) || `HTTP ${res.status}` }; }
+  if (!opts.noDailyCap && env.WIRE_KV) {
+    try {
+      const dayKey = `routine:fires:${londonDate()}`;
+      const used = Number(await env.WIRE_KV.get(dayKey)) || 0;
+      await env.WIRE_KV.put(dayKey, String(used + 1), { expirationTtl: 86400 * 2 });
+    } catch (_) {}
+  }
   return { ok: true, fired: true, session: data.claude_code_session_url || null };
 }
 
@@ -776,6 +807,22 @@ async function personalisedFireText(env, uid, profile) {
     `POST the result to $INGEST_URL exactly as usual, but include "userId": "${uid}" in the JSON body alongside "items" so it lands in this user's feed: {"userId":"${uid}","items":[...]}.`,
     `ALSO produce a personalised version of the daily audio show in the "podcast" field of the same POST body, alongside "items" and "userId": {"userId":"${uid}","items":[...],"podcast":[...]}. Build it exactly as the "podcast" field section of the briefing prompt describes, the produced drive-time anchor show with one MBE-style host who MCs throughout, but using ONLY this reader's desks above plus the special "host" anchor, and order the segments by what matters most to THIS reader today. Each turn is {"desk":"<category id or 'host'>","text":"..."}; use "host" for the anchor and the exact category id above for each correspondent. Keep the one named through-line from cold open to sign-off, one vivid concrete detail per story, host links that do work between every desk, at least one host-to-desk question-then-answer per featured desk, and the accuracy pushback "careful, is that confirmed, or is that the rumour?" where a desk strays into speculation. Hold every hard rule: speakable British English only, never em or en dashes, audio tags only at the start of a turn, 1 to 3 sentences and under about 700 characters per turn, attribute sources in speech, separate confirmed fact from speculation and flag rumour as rumour, never hype, never humour on tragedy. If the reader has only one desk, the host still MCs it as a real two-way segment with a hook, a follow-up, a "what to watch" and a branded sign-off, never a single flat monologue. If a turn could be cut without losing anything, cut it.`,
   ].join("\n");
+}
+
+// One door for firing a personalised rebuild: the fire text is built lazily
+// (only once fireRoutine's throttles pass) and the user's pending-rebuild
+// marker — set by /api/profile when a requested rebuild couldn't start — is
+// cleared as soon as ANY fire for this user does start, whichever path fired.
+const pendingKey = uid => `pending:u:${uid}`;
+async function firePersonalised(env, uid, profile, opts) {
+  const r = await fireRoutine(env, {
+    text: () => personalisedFireText(env, uid, profile),
+    rateKey: `routine:last_fire:u:${uid}`,
+    globalKey: "routine:last_fire:_personalised",
+    ...opts,   // the cron overrides: no globalKey (it's the controlled scheduler), no daily cap
+  });
+  if (r && r.fired && env.WIRE_KV) { try { await env.WIRE_KV.delete(pendingKey(uid)); } catch (_) {} }
+  return r;
 }
 
 // ---- audio (per-item "listen" read-outs, ElevenLabs → R2 cache) ----------
@@ -938,14 +985,27 @@ async function ensurePodcastRendered(env, turns, date, key) {
   if (!env.WIRE_AUDIO || !env.ELEVENLABS_API_KEY || !Array.isArray(turns) || !turns.length) return null;
   key = key || await podcastKey(turns, date);
   const lockKey = `podcast:lock:${key}`;
+  let acquired = false, rendered = false;
   try {
     if (await env.WIRE_AUDIO.head(key)) return key;                 // already rendered
-    if (env.WIRE_KV && await env.WIRE_KV.get(lockKey)) return key;  // another render in flight
-    if (env.WIRE_KV) await env.WIRE_KV.put(lockKey, "1", { expirationTtl: 120 });
+    if (env.WIRE_KV && await env.WIRE_KV.get(lockKey)) return key;  // another render in flight — leave its lock alone
+    if (env.WIRE_KV) { await env.WIRE_KV.put(lockKey, "1", { expirationTtl: 120 }); acquired = true; }
     const bytes = await renderPodcast(env, turns);
     await env.WIRE_AUDIO.put(key, bytes, { httpMetadata: { contentType: "audio/mpeg" } });
-  } catch (_) { /* leave the lock to expire; a later trigger retries */ }
-  finally { if (env.WIRE_KV) { try { await env.WIRE_KV.delete(lockKey); } catch (_) {} } }
+    rendered = true;
+  } catch (_) {
+    // Failed render: shorten the lock to ~60s (KV's minimum TTL). Enough
+    // backoff that per-play retries can't re-bill in a tight loop, short
+    // enough that the player's ~2min poll window outlives it and recovers.
+    if (acquired && env.WIRE_KV) { try { await env.WIRE_KV.put(lockKey, "1", { expirationTtl: 60 }); } catch (_) {} }
+  }
+  finally {
+    // Release only a lock THIS call acquired, and only after success. An
+    // observer deleting it here broke the in-flight render's mutual exclusion
+    // (duplicate paid renders); deleting on failure removed the backoff the
+    // catch above promises.
+    if (acquired && rendered && env.WIRE_KV) { try { await env.WIRE_KV.delete(lockKey); } catch (_) {} }
+  }
   return key;
 }
 
@@ -974,7 +1034,7 @@ function normalizeIngest(items) {
       readout: x.readout ? deDash(String(x.readout)).slice(0, 1800) : "",
       contentType: x.contentType ? String(x.contentType).slice(0, 40) : "News",
       source: x.source ? String(x.source).slice(0, 120) : "",
-      url: x.url ? String(x.url).slice(0, 600) : "",
+      url: httpUrl(x.url).slice(0, 600),
       publishedAt: x.publishedAt ? String(x.publishedAt).slice(0, 40) : (x.pubDate ? String(x.pubDate).slice(0, 40) : (x.published ? String(x.published).slice(0, 40) : null)),
       direction: x.direction || null,
       changePct: x.changePct || null,
@@ -1046,8 +1106,13 @@ async function ingestBriefing(env, payload, target) {
   const fixture = (payload && typeof payload.fixture === "string") ? payload.fixture : null;
 
   // Daily podcast script (shared feed and each personalised feed now carry one);
-  // keep any prior one if this payload doesn't carry a fresh script.
-  const podcast = sanitizePodcast(payload && payload.podcast) || (existing && existing.podcast) || null;
+  // keep any prior one if this payload doesn't carry a fresh script — but only
+  // from TODAY's feed (mirrors the items merge above). Carrying yesterday's
+  // across the rollover served old news as "today" and re-rendered the same
+  // script at full cost under today's key.
+  const samedayPrior = (existing && existing.date === londonDate() && Array.isArray(existing.podcast) && existing.podcast.length)
+    ? existing.podcast : null;
+  const podcast = sanitizePodcast(payload && payload.podcast) || samedayPrior || null;
 
   const out = { date: londonDate(), generatedAt: stamp, slot, items, fixture, report, desks, podcast, staleDropped, source: "routine" };
   if (env.WIRE_KV) {
@@ -1361,10 +1426,11 @@ export default {
         const wantMeta = url.searchParams.get("meta") === "1";
         if (!turns || !turns.length) return wantMeta ? json({ ready: false }) : json({ error: "podcast not ready" }, 404);
         const key = await podcastKey(turns, feed.date);
+        // meta is a fast status probe (used by the player to decide warm vs cold,
+        // and polled while a cold render runs); head() only — never fetch the
+        // body or render for a status check.
+        if (wantMeta) return json({ ready: !!(await env.WIRE_AUDIO.head(key)), date: feed.date || null, turns: turns.length, key });
         let hit = await env.WIRE_AUDIO.get(key);
-        // meta is a fast status probe (used by the player to decide warm vs cold);
-        // it never renders, so polling it stays cheap.
-        if (wantMeta) return json({ ready: !!hit, date: feed.date || null, turns: turns.length, key });
         if (hit) return new Response(hit.body, { headers: { "content-type": "audio/mpeg", "cache-control": "public, max-age=3600" } });
         // Cold cache (the prewarm on ingest is the usual path; this is the fallback).
         // Render AWAITED in-handler so it gets a real wall-clock budget — ctx.waitUntil
@@ -1395,7 +1461,19 @@ export default {
         // (source:"routine") is fresh — don't re-fire it all day on a quiet day.
         const fresh = cached && cached.date === londonDate() && cached.generatedAt
           && !(useRoutine && !hasItems && cached.source !== "routine");
-        if (fresh) return json(cached);
+        if (fresh) {
+          // A desk edit whose fire couldn't start left a pending marker (see
+          // /api/profile); retry it here — fireRoutine still self-throttles —
+          // so the rebuild isn't silently lost until the next cron.
+          if (useRoutine && routineFireConfigured(env) && t.key !== "shared" && env.WIRE_KV
+              && await env.WIRE_KV.get(pendingKey(t.key.slice(2)))) {
+            const refresh = await firePersonalised(env, t.key.slice(2), t.profile);
+            // generating only when a rebuild actually started — a throttled
+            // retry must not make an empty-but-fresh feed look like a build.
+            return json(refresh && refresh.fired ? { ...cached, generating: true, refresh } : { ...cached, refresh });
+          }
+          return json(cached);
+        }
         // When the routine owns generation, never trigger a metered API build
         // here — a personalised feed is built by the routine (subscription), the
         // shared feed by the routine's schedule + refresh. A global throttle
@@ -1404,11 +1482,7 @@ export default {
         if (useRoutine && routineFireConfigured(env)) {
           let refresh;
           if (t.key !== "shared") {
-            refresh = await fireRoutine(env, {
-              text: await personalisedFireText(env, t.key.slice(2), t.profile),
-              rateKey: `routine:last_fire:${t.key}`,
-              globalKey: "routine:last_fire:_personalised",
-            });
+            refresh = await firePersonalised(env, t.key.slice(2), t.profile);
           }
           const base = hasItems ? { ...cached, generating: true } : generatingShell();
           return json(refresh ? { ...base, refresh } : base);
@@ -1432,12 +1506,8 @@ export default {
         // global throttles bound cap-drain, so no sign-in gate is needed.
         if (useRoutine && routineFireConfigured(env)) {
           const refresh = t.key === "shared"
-            ? await fireRoutine(env, { text: await sharedFireText(env) })
-            : await fireRoutine(env, {
-                text: await personalisedFireText(env, t.key.slice(2), t.profile),
-                rateKey: `routine:last_fire:${t.key}`,
-                globalKey: "routine:last_fire:_personalised",
-              });
+            ? await fireRoutine(env, { text: () => sharedFireText(env) })
+            : await firePersonalised(env, t.key.slice(2), t.profile);
           const cached = await readJSON(env, t.writeKeys.latest);
           return json({ ...(cached || generatingShell()), generating: true, refresh });
         }
@@ -1478,12 +1548,13 @@ export default {
           target = { latest: userBriefKey(uid), snapshot: `${userBriefKey(uid)}:${londonDate()}`, desks: deskList(profile) };
         }
         const out = await ingestBriefing(env, body, target);
-        // Warm the podcast cache now (shared feed only) so it's ready before anyone
-        // taps play. Render AWAITED here (not ctx.waitUntil, whose ~30s post-response
-        // budget would kill the ~40s render before it caches) — the routine POST can
-        // absorb the latency. This is the reliable render path; the cold GET below
-        // is only a fallback.
-        if (!uid && Array.isArray(out.podcast) && out.podcast.length && env.ELEVENLABS_API_KEY && env.WIRE_AUDIO) {
+        // Warm the podcast cache now (shared AND personalised feeds) so it's ready
+        // before anyone taps play. Render AWAITED here (not ctx.waitUntil, whose
+        // ~30s post-response budget would kill the ~40s render before it caches) —
+        // the routine POST can absorb the latency. This is the reliable render
+        // path; the cold GET below is only a fallback. Without the personalised
+        // prewarm, every signed-in reader's first play ate the full cold render.
+        if (Array.isArray(out.podcast) && out.podcast.length && env.ELEVENLABS_API_KEY && env.WIRE_AUDIO) {
           try { await ensurePodcastRendered(env, out.podcast, out.date); } catch (_) {}
         }
         return json({ ok: true, date: out.date, slot: out.slot, accepted: out.items.length, target: uid ? `user:${uid}` : "shared", report: out.report });
@@ -1506,12 +1577,17 @@ export default {
           const useRoutine = String(env.FEED_SOURCE || "").toLowerCase() === "routine";
           if (useRoutine && routineFireConfigured(env)) {
             // Rebuild via the routine (subscription), not the metered API — else
-            // editing desks lands the "credit balance" error on every desk.
-            ctx.waitUntil((async () => fireRoutine(env, {
-              text: await personalisedFireText(env, u, profile),
-              rateKey: `routine:last_fire:u:${u}`,
-              globalKey: "routine:last_fire:_personalised",
-            }))());
+            // editing desks lands the "credit balance" error on every desk. A
+            // throttled fire was silently dropped while the UI said "generating";
+            // leave a marker so /api/today retries it once the window clears.
+            ctx.waitUntil((async () => {
+              const r = await firePersonalised(env, u, profile);
+              // Throttled OR failed: either way the requested rebuild didn't
+              // start — leave the marker so /api/today retries it.
+              if (r && !r.fired && env.WIRE_KV) {
+                try { await env.WIRE_KV.put(pendingKey(u), "1", { expirationTtl: 7200 }); } catch (_) {}
+              }
+            })());
           } else {
             const writeKeys = { latest: userBriefKey(u), snapshot: `${userBriefKey(u)}:${londonDate()}` };
             ctx.waitUntil(startBuild(env, `u:${u}`, profile, writeKeys));
@@ -1567,10 +1643,7 @@ export default {
             const profile = await readJSON(env, profileKey(u));
             if (!isCustomised(profile)) continue;
             if (!(await env.WIRE_KV.get(activeKey(u)))) continue;   // skip dormant users
-            await fireRoutine(env, {
-              text: await personalisedFireText(env, u, profile),
-              rateKey: `routine:last_fire:u:${u}`,
-            });
+            await firePersonalised(env, u, profile, { globalKey: null, noDailyCap: true });
             fired++;
           }
         } catch (_) {}

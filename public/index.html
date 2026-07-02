@@ -220,7 +220,7 @@ const LS = { uid:"jackwire:uid", profile:"jackwire:profile", read:"jackwire:read
 
 // ---- identity + profile (persisted locally, synced to the server) --------
 function getUid(){
-  let u = localStorage.getItem(LS.uid);
+  let u = null; try{ u = localStorage.getItem(LS.uid); }catch(_){}  // storage can throw (blocked site data) — degrade, don't blank the app
   if(!u || !/^[A-Za-z0-9_-]{8,64}$/.test(u)){
     u = (self.crypto && crypto.randomUUID ? crypto.randomUUID().replace(/-/g,"")
         : "u"+Math.random().toString(36).slice(2)+Date.now().toString(36)).slice(0,40);
@@ -239,7 +239,7 @@ function saveProfile(){ try{ localStorage.setItem(LS.profile, JSON.stringify(sta
 const state = {
   uid: getUid(),
   profile: loadProfile(),
-  data: null, error: null, loading: true, filter: "all",
+  data: null, error: null, loading: true, filter: "all", awaitGen: null, armNext: false,
   showSettings: false, showAddDesk: false, toast: null,
   read: new Set(), dismissed: new Set(), seen: {}, cooldown: null,
   seenBefore: (function(){ try{ return localStorage.getItem("jackwire:lastseen")||""; }catch(_){ return ""; } })(),
@@ -407,11 +407,12 @@ function profileForServer(){
 async function putProfile(regenerate){
   // Personalising is a signed-in feature now; anon tuning stays local-only so we
   // don't fire 401s at the server. The shared feed still works for everyone.
-  if(!state.auth.signedIn) return;
+  if(!state.auth.signedIn) return false;
   try{
-    await fetch("/api/profile", { method:"PUT", headers:{"content-type":"application/json"},
+    const r = await fetch("/api/profile", { method:"PUT", headers:{"content-type":"application/json"},
       body: JSON.stringify({ profile: profileForServer(), regenerate: !!regenerate }) });
-  }catch(_){}
+    return r.ok;   // callers waiting on a rebuild need to know if it was even requested (e.g. session expired → 401)
+  }catch(_){ return false; }
 }
 
 // ---- account / sign-in --------------------------------------------------
@@ -437,11 +438,15 @@ async function loadServerProfile(){
 let _wt;
 function syncWeights(){ saveProfile(); clearTimeout(_wt); _wt = setTimeout(()=>putProfile(false), 1500); }
 let _dt;
-function syncDesks(){ // desk set changed → regenerate, then poll for the new briefing
+function syncDesks(){ // desk set changed → regenerate, then poll until the rebuilt briefing lands
   saveProfile();
   state.loading = true; render();
   clearTimeout(_dt);
-  _dt = setTimeout(()=>{ putProfile(true).then(()=> load(false)); }, 1000);
+  // Arm on the NEXT fetch's generatedAt (see load), not the possibly-stale one
+  // on screen — a cron build landing in between would end the wait early.
+  // Signed-in only: anon edits are local filters, no rebuild ever arrives.
+  state.armNext = !!state.auth.signedIn;
+  _dt = setTimeout(()=>{ putProfile(true).then(ok=>{ if(!ok){ state.armNext=false; state.awaitGen=null; } load(false); }); }, 1000);
 }
 let _nt;
 function setDeskNote(id, txt){ // per-desk reader instruction → rebuild that feed
@@ -452,7 +457,8 @@ function setDeskNote(id, txt){ // per-desk reader instruction → rebuild that f
   if(v) state.profile.notes[id] = v; else delete state.profile.notes[id];
   saveProfile();
   clearTimeout(_nt);
-  _nt = setTimeout(()=>{ putProfile(true).then(()=> load(false)); }, 1500);
+  state.armNext = !!state.auth.signedIn;   // see syncDesks — arm on the next fetch's stamp
+  _nt = setTimeout(()=>{ putProfile(true).then(ok=>{ if(!ok){ state.armNext=false; state.awaitGen=null; } load(false); }); }, 1500);
 }
 
 // ---- data load + background-build polling --------------------------------
@@ -464,6 +470,11 @@ async function fetchData(force){
 }
 function applyData(data){ state.data = data; hydrateRead(data.date); if(data.items && data.items.length){ markSeen(); recordSeen(data.items); } }
 const isBuilding = d => d && d.generating && (!d.items || !d.items.length);
+// Keep polling while an empty build runs, OR while a rebuild we kicked off
+// (manual refresh, desk change) hasn't landed — i.e. generatedAt hasn't moved
+// past what we were showing when we asked. The old empty-feed-only check meant
+// Refresh and desk edits never actually delivered the new briefing.
+const shouldPoll = d => isBuilding(d) || (state.awaitGen != null && d && String(d.generatedAt||"") === state.awaitGen);
 
 // A routine refresh takes minutes to land, so lock the Refresh button for ~5 min
 // after a manual refresh (persisted, so a page reload doesn't bypass it).
@@ -477,29 +488,40 @@ async function load(force){
   try{
     const data = await fetchData(force);
     if (data.error) throw new Error(data.detail || data.error);
-    applyData(data);
     // Only lock Refresh if a routine run actually started — not when throttled
     // or skipped — so the button doesn't claim "Refreshing…" when nothing ran.
     if (force && data.refresh && data.refresh.fired) lockRefresh();
+    // A rebuild we kicked off (refresh fire, desk edit) arms awaitGen off THIS
+    // fetch's stamp: poll until generatedAt moves past it.
+    if ((force && data.refresh && data.refresh.fired) || state.armNext){ state.awaitGen = String(data.generatedAt||""); state.armNext = false; }
+    applyData(data);
     state.cooldown = (data.refresh && data.refresh.throttled) ? (data.refresh.retryInSec || 0) : null;
-    if (isBuilding(data)){ window.__poll = setTimeout(poll, 4000); }
-    else state.loading = false;
-  }catch(e){ state.error = String(e.message || e); state.loading = false; }
+    if (shouldPoll(data)){ window.__poll = setTimeout(poll, 4000); }
+    else { state.loading = false; state.awaitGen = null; }
+  }catch(e){ state.error = String(e.message || e); state.loading = false; state.awaitGen = null; state.armNext = false; }
   render();
 }
 async function poll(){
-  // Bound the poll so a stuck/throttled build can't spin the loader forever
-  // (~3 min): after that, show whatever's cached and let the user refresh.
-  if ((window.__pollN = (window.__pollN || 0) + 1) > 45){ state.loading = false; render(); return; }
+  // Bound the poll so a stuck/throttled build can't spin the loader forever.
+  // A routine rebuild takes minutes, so back off to 10s after the first minute;
+  // ~60 ticks ≈ 8½ min total, then show whatever's cached.
+  if ((window.__pollN = (window.__pollN || 0) + 1) > 60){ state.loading = false; state.awaitGen = null; render(); return; }
+  const wait = state.cooldown ? 15000 : (window.__pollN > 15 ? 10000 : 4000);   // throttled fire → generatedAt can't move for minutes; poll gently
   try{
     const data = await fetchData(false);
     if(!data.error){
+      const changed = !state.data || String(data.generatedAt||"") !== String(state.data.generatedAt||"")
+        || (data.items||[]).length !== ((state.data.items)||[]).length;
       applyData(data);
       state.cooldown = (data.refresh && data.refresh.throttled) ? (data.refresh.retryInSec || 0) : null;
-      if(isBuilding(data)) window.__poll = setTimeout(poll, 4000);
-      else state.loading = false;
-    } else { window.__poll = setTimeout(poll, 5000); }
-  }catch(_){ window.__poll = setTimeout(poll, 5000); }
+      if(shouldPoll(data)){
+        window.__poll = setTimeout(poll, wait);
+        if(changed) render();   // repaint only on real change — a 4s full re-render wiped open panels and half-typed notes
+        return;
+      }
+      state.loading = false; state.awaitGen = null;
+    } else { window.__poll = setTimeout(poll, 5000); return; }
+  }catch(_){ window.__poll = setTimeout(poll, 5000); return; }
   render();
 }
 
@@ -719,7 +741,8 @@ function render(){
       const info = cat(it.category); const ac = info.accent;
       const dirCol = it.direction==="up"?"var(--up)":it.direction==="down"?"var(--down)":"var(--muted)";
       const arrow = it.direction==="up"?"▲":it.direction==="down"?"▼":"■";
-      const titleHtml = it.url ? `<a href="${esc(it.url)}" target="_blank" rel="noreferrer">${esc(it.title)}</a>` : esc(it.title);
+      const safeHref = /^https?:\/\//i.test(String(it.url||"")) ? it.url : "";   // never anchor a javascript:/data: url
+      const titleHtml = safeHref ? `<a href="${esc(safeHref)}" target="_blank" rel="noreferrer">${esc(it.title)}</a>` : esc(it.title);
       return `<article class="card" data-id="${esc(it.id)}" style="--ac:${ac}">
         <div class="sw like">✓ Read</div>
         <div class="sw nope">◂ Not for me</div>
@@ -886,7 +909,7 @@ function toggleListen(id){
 // the voices are mono; concatenating the two pitches the voice up in some players.
 // The episode renders server-side (ElevenLabs) and caches in R2; it's usually
 // pre-warmed on build, on a cold cache the GET renders (~40s) then streams.
-let _pod=null, _podBusy=false, _podQ=[], _podI=0;
+let _pod=null, _podBusy=false, _podQ=[], _podI=0, _podGen=0;   // _podGen: cancellation token for the cold-render wait
 function syncPod(){
   const b=document.getElementById("podplay"); if(!b) return;
   const playing=!!(_pod && !_pod.paused && !_pod.ended);
@@ -905,23 +928,43 @@ function podPlayNext(){
   _pod.addEventListener("error", ()=>{
     // Intro/outro are optional flourishes: if a beat fails, skip straight on.
     if(track.optional){ _podI++; podPlayNext(); return; }
-    // The episode is essential: a cold GET can briefly 503 while it renders, retry.
+    // The episode is essential, and a cold GET 503s for the length of a full
+    // render (~40-60s). Poll the cheap meta probe until it reports ready (or
+    // the ~90s budget runs out), re-attempting the audio at least every ~30s —
+    // the old fixed 2×5s retry gave up long before a cold render could finish.
     const s=document.getElementById("podsub");
-    if((track.retries = (track.retries==null ? 2 : track.retries)) > 0){
-      track.retries--; if(s) s.textContent="Generating today's episode… (up to a minute)";
-      _podBusy=true; syncPod(); setTimeout(()=>{ _podBusy=false; podPlayNext(); }, 5000);
-    } else { _pod=null; if(s) s.textContent="Couldn't load the episode, try again shortly."; syncPod(); }
+    if(track.polls==null) track.polls = 24;   // ~2 min budget — outlives a full render plus the failure-backoff lock
+    if(track.polls <= 0){ _pod=null; _podBusy=false; if(s) s.textContent="Couldn't load the episode, try again shortly."; syncPod(); return; }
+    if(s) s.textContent="Generating today's episode… (up to a minute)";
+    _podBusy=true; syncPod();
+    const gen = _podGen;   // a cancelling tap bumps _podGen and orphans this loop
+    let burst = 6;
+    const tick = ()=> setTimeout(async ()=>{
+      if(gen !== _podGen) return;
+      track.polls--; burst--;
+      const m = await podMeta();
+      if(gen !== _podGen) return;
+      if((m && m.ready) || burst <= 0 || track.polls <= 0){ _podBusy=false; podPlayNext(); }
+      else tick();
+    }, 5000);
+    tick();
   });
   _pod.play().catch(()=> syncPod());
   syncPod();
 }
 const podMeta=()=> fetch("/api/podcast/today?meta=1").then(r=>r.json()).catch(()=>null);
 async function podToggle(){
+  if(_podBusy){ // tap during the cold-render wait = cancel; don't auto-play a minute later
+    _podGen++; _podBusy=false; _pod=null; _podQ=[];
+    const s=document.getElementById("podsub"); if(s) s.textContent="The day's news, talked through";
+    syncPod(); return;
+  }
   if(_pod){ _pod.paused ? _pod.play() : _pod.pause(); syncPod(); return; }
-  if(_podBusy) return;
   const sub=document.getElementById("podsub");
   _podBusy=true; syncPod();
+  const gen=_podGen;
   const m=await podMeta();
+  if(gen!==_podGen) return;   // cancelled while we probed — don't rebuild the queue and play anyway
   if(!m || !m.turns){ if(sub) sub.textContent="Built with the next refresh."; _podBusy=false; syncPod(); return; }
   if(!m.ready && sub) sub.textContent="Generating today's episode… (up to a minute)";
   _podQ=[

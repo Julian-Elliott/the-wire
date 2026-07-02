@@ -60,3 +60,4 @@ FEED_SOURCE = "routine"
 #   wrangler secret put ROUTINE_FIRE_TOKEN
 # ROUTINE_FIRE_URL = "https://api.anthropic.com/v1/claude_code/routines/<routine_id>/fire"
 # ROUTINE_FIRE_MIN_SECONDS = "900"   # min seconds between fires (protect the daily run cap)
+# ROUTINE_FIRE_DAILY_MAX = "15"      # hard ceiling on fires per London day, all targets combined
