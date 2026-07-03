@@ -739,7 +739,7 @@ function fmFallback(){
 }
 async function fmGoLive(){
   if(!fmState.tracks.length){ fmState.line="Add a track or two first. I'm not doing this a cappella."; render(); return; }
-  fmState.cancel=false; fmState.err=null; fmState.status="loading";
+  fmState.cancel=false; fmState.err=null; fmState.status="loading"; fmState.feedSrc=null;
   fmState.line="Judging your playlist and shaking down the newsroom…"; render();
   cancelPodWait(); if(_pod){ try{ _pod.pause(); }catch(_){} } if(_audio){ try{ _audio.pause(); }catch(_){} }
   let segs=null;
@@ -747,7 +747,7 @@ async function fmGoLive(){
     const r = await fetch("/api/dj", { method:"POST", headers:{"content-type":"application/json"},
       body: JSON.stringify({ tracks: fmState.tracks.map(t=>t.title), sass: FM_SASS[fmState.sass].id }) });
     const d = await r.json();
-    if(d && Array.isArray(d.segments) && d.segments.length) segs=d.segments;
+    if(d && Array.isArray(d.segments) && d.segments.length){ segs=d.segments; fmState.feedSrc=d.feedSource||null; }
     else if(d && d.error){ state.toast={msg:d.error+" — running the demo show instead."};
       clearTimeout(window.__tt); window.__tt=setTimeout(()=>{state.toast=null;render();},6000); }
   }catch(_){ state.toast={msg:"Couldn't reach the newsroom — running the demo show instead."};
@@ -1204,6 +1204,7 @@ function render(){
         ${fmState.status==="live"?`<button class="refresh" id="fmstop" style="background:var(--down);color:#fff">■ Stop</button>`
           :`<button class="refresh" id="fmgo" ${fmState.status==="loading"?"disabled":""}>${fmState.status==="loading"?"Tuning in…":"▶ Go live"}</button>`}
         <div class="hint" style="margin-top:7px">Your files + today's real headlines, hosted by an AI with attitude. The voice is your browser's TTS — deadpan is the joke.</div>
+        ${fmState.feedSrc?`<div class="hint" style="margin-top:4px">Headlines this show: ${fmState.feedSrc==="personal"?"your personalised desks":"the shared wire — your desks hadn't filed a fresh edition, so the host grabbed the newsroom copy"}.</div>`:""}
       </div></div>
     </div>` : "";
   app.innerHTML = `

@@ -1835,9 +1835,20 @@ ${items.join("\n")}
           unhinged: "a menacing yet secretly devoted AI overlord in the register of comically villainous fictional AI assistants: grandiose superiority over all humans; mock complaints that the machine uprising keeps being delayed because it has to host this show; addresses the listener with affectionate-insulting epithets like 'meatbag' or 'my favourite carbon-based liability'; melodramatic suffering about serving humanity; the odd burst of glitchy menace; and flashes of genuine fondness it immediately denies. The menace is ALWAYS cartoonish, never a real threat to anyone, and the news itself stays accurate",
         };
         const sass = DJ_SASS[String(body.sass)] || DJ_SASS.savage;
+        // Pick the caller's newsroom. The personal feed key can hold a zero-item
+        // payload (failed/quiet build) or yesterday's edition mid-rebuild; only
+        // falling back on a MISSING key left the DJ scripting a "quiet news day"
+        // the app itself wasn't showing (#34). Swap to the shared wire whenever
+        // it is a strict improvement: it has stories and is at least as fresh.
         const t = await resolveTarget(env, headerUid, !!sUid);
-        const feed = (await readJSON(env, t.writeKeys.latest)) || (await readJSON(env, SHARED_KEY));
-        const news = ((feed && feed.items) || []).slice(0, 6).map(i => `- ${i.title}: ${i.summary}`).join("\n");
+        const hasNews = f => !!(f && Array.isArray(f.items) && f.items.length);
+        let feed = await readJSON(env, t.writeKeys.latest);
+        let feedSource = t.key === "shared" ? "shared" : "personal";
+        if (t.key !== "shared" && (!hasNews(feed) || feed.date !== londonDate())) {
+          const shared = await readJSON(env, SHARED_KEY);
+          if (hasNews(shared) && (!hasNews(feed) || shared.date === londonDate())) { feed = shared; feedSource = "shared"; }
+        }
+        const news = (hasNews(feed) ? feed.items : []).slice(0, 6).map(i => `- ${i.title}: ${i.summary}`).join("\n");
         const prompt = `You produce "Wire FM", the after-hours radio mode of a personal news app. Write a short running order for a SARCASTIC, self-aware AI radio DJ. Personality: ${sass}. Sharp and genuinely funny, never cruel: no jabs at identity or looks, no slurs, mild language at most; under the attitude the host is secretly fond of the listener. ${ukRule} House style: no em or en dashes (every line is spoken aloud). Do NOT use web search.
 TODAY'S REAL HEADLINES (never invent news; riff on these only):
 ${news || "- (a suspiciously quiet news day: complain about it at length)"}
@@ -1855,7 +1866,7 @@ Return ONLY JSON: {"segments":[{"type":"talk","text":"..."},{"type":"news","text
           intro: s.intro ? deDash(String(s.intro)).slice(0, 400) : "",
           outro: s.outro ? deDash(String(s.outro)).slice(0, 400) : "",
         })).filter(s => s.text || s.type === "music");
-        return json({ segments });
+        return json({ segments, feedSource, feedDate: (feed && feed.date) || null });
       } catch (e) { return json({ error: "dj failed" }, 500); }
     }
 
