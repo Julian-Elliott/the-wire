@@ -689,16 +689,28 @@ async function fmPlaySeg(seg){
     const tr = fmState.tracks[(seg.track||1)-1]; if(!tr) return;
     if(tr.amId && _mk){   // Apple Music: play via MusicKit's own player
       try{
-        await _mk.setQueue({ playlist: fmState.amPlaylist, startPosition: (seg.track||1)-1 });
+        // Queue EXACTLY this segment's song. startPosition on a library-playlist
+        // queue is silently ignored, so every link back from the presenter
+        // restarted the queue at item 0 — the whole playlist played as song 1
+        // (#34). Single-song queue sidesteps positions; positioned playlist is
+        // the fallback if the library id won't queue directly.
+        const idx=(seg.track||1)-1;
+        let queued=false;
+        try{ await _mk.setQueue({ songs:[tr.amId] }); queued=!!(_mk.queue && _mk.queue.length); }catch(_){ queued=false; }
+        if(!queued){
+          await _mk.setQueue({ playlist: fmState.amPlaylist, startPosition: idx });
+          try{ if(idx>0 && typeof _mk.changeToMediaAtIndex==="function") await _mk.changeToMediaAtIndex(idx); }catch(_){}
+        }
         _mk.volume = seg.intro?0.15:0.9;
         _mk.play();
         if(seg.intro){ fmSetLine("ON AIR", seg.intro); await fmSpeak(seg.intro); if(fmState.cancel){ try{_mk.stop();}catch(_){} return; } }
         fmSetLine("NOW PLAYING", tr.title + (tr.artist? " — "+tr.artist : ""));
         const ramp=setInterval(()=>{ try{ _mk.volume=Math.min(0.95,(_mk.volume||0)+0.12); if(_mk.volume>=0.95) clearInterval(ramp); }catch(_){ clearInterval(ramp); } },100);
-        await new Promise(res=>{ const poll=setInterval(()=>{
+        await new Promise(res=>{ let stalls=0; const poll=setInterval(()=>{
           if(fmState.cancel){ try{_mk.stop();}catch(_){} clearInterval(poll); res(); return; }
           const dur=_mk.currentPlaybackDuration||0, cur=_mk.currentPlaybackTime||0;
           if(dur>0 && cur>=dur-0.7){ try{_mk.pause();}catch(_){} clearInterval(poll); res(); }   // pause before auto-advance steals the next track
+          else if(dur<=0 && ++stalls>66){ clearInterval(poll); res(); }   // ~20s with nothing loaded: don't hang the show
         },300); });
         clearInterval(ramp);
         if(!fmState.cancel && seg.outro){ fmSetLine("BACK-ANNOUNCE", seg.outro); await fmSpeak(seg.outro); }
@@ -754,6 +766,11 @@ async function fmGoLive(){
     clearTimeout(window.__tt); window.__tt=setTimeout(()=>{state.toast=null;render();},6000); }
   if(fmState.cancel) return;
   if(!segs) segs = fmFallback();   // signed-out / throttled / offline → canned show, still funny
+  // Normalise track numbers: a missing/out-of-range one from the DJ script
+  // used to collapse onto (track||1) = song 1. Walk forward instead.
+  { let last=0; const n=fmState.tracks.length;
+    segs.forEach(s=>{ if(s.type!=="music") return; let i=Number(s.track);
+      if(!(i>=1&&i<=n)) i=Math.min(n,last+1); s.track=i; last=i; }); }
   fmState.segs=segs; fmState.status="live"; render();
   fmRun();
 }
