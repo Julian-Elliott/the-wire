@@ -641,7 +641,7 @@ const FM_SASS = [
   { id:"savage", label:"Savage" }, { id:"unhinged", label:"Unhinged" },
 ];
 const fmOn = ()=>{ try{ return localStorage.getItem("jackwire:fm")==="1"; }catch(_){ return false; } };
-const fmState = { open:false, tracks:[], status:"idle", segs:[], idx:-1, audio:null, cancel:false,
+const fmState = { open:false, tracks:[], status:"idle", segs:[], idx:-1, audio:null, cancel:false, skip:0, fold:{},
   line:"Off air. Press GO LIVE and let's get this over with.",
   sass:(()=>{ try{ const n=Number(localStorage.getItem("jackwire:fmsass")); return n>=0&&n<4?n:2; }catch(_){ return 2; } })() };
 let _mk = null;   // MusicKit instance (lazy)
@@ -680,7 +680,13 @@ function fmSpeak(text){ return new Promise(res=>{
   if(!sy||!text) return setTimeout(res, Math.min(6000, Math.max(1500,(text||"").length*45)));
   const u=new SpeechSynthesisUtterance(text);
   const vs=sy.getVoices(); u.voice=vs.find(v=>/en-GB/i.test(v.lang))||vs.find(v=>v.lang&&v.lang.startsWith("en"))||null;
-  u.rate=1.05; u.onend=res; u.onerror=res; sy.speak(u);
+  u.rate=1.05;
+  // Skip/stop must cut speech mid-sentence, and cancel() doesn't reliably
+  // fire onend everywhere — a watcher guarantees the promise settles.
+  let done=false; const fin=()=>{ if(done) return; done=true; clearInterval(gp); res(); };
+  u.onend=fin; u.onerror=fin;
+  const gp=setInterval(()=>{ if(fmState.cancel||fmState.skip){ try{ sy.cancel(); }catch(_){} fin(); } },250);
+  sy.speak(u);
 }); }
 function fmSetLine(type,text){ fmState.line=text||""; const l=document.getElementById("fmline"); if(l) l.textContent=fmState.line; const ty=document.getElementById("fmtype"); if(ty) ty.textContent=type; }
 function fmMarkRow(i){ document.querySelectorAll("#fmorder .fm-row").forEach((el,j)=> el.classList.toggle("fm-on", j===i)); }
@@ -703,40 +709,56 @@ async function fmPlaySeg(seg){
         }
         _mk.volume = seg.intro?0.15:0.9;
         _mk.play();
-        if(seg.intro){ fmSetLine("ON AIR", seg.intro); await fmSpeak(seg.intro); if(fmState.cancel){ try{_mk.stop();}catch(_){} return; } }
+        if(seg.intro){ fmSetLine("ON AIR", seg.intro); await fmSpeak(seg.intro); if(fmState.cancel||fmState.skip){ try{ fmState.cancel?_mk.stop():_mk.pause(); }catch(_){} return; } }
         fmSetLine("NOW PLAYING", tr.title + (tr.artist? " — "+tr.artist : ""));
         const ramp=setInterval(()=>{ try{ _mk.volume=Math.min(0.95,(_mk.volume||0)+0.12); if(_mk.volume>=0.95) clearInterval(ramp); }catch(_){ clearInterval(ramp); } },100);
         await new Promise(res=>{ let stalls=0; const poll=setInterval(()=>{
-          if(fmState.cancel){ try{_mk.stop();}catch(_){} clearInterval(poll); res(); return; }
+          if(fmState.cancel||fmState.skip){ try{ fmState.cancel?_mk.stop():_mk.pause(); }catch(_){} clearInterval(poll); res(); return; }
           const dur=_mk.currentPlaybackDuration||0, cur=_mk.currentPlaybackTime||0;
           if(dur>0 && cur>=dur-0.7){ try{_mk.pause();}catch(_){} clearInterval(poll); res(); }   // pause before auto-advance steals the next track
           else if(dur<=0 && ++stalls>66){ clearInterval(poll); res(); }   // ~20s with nothing loaded: don't hang the show
         },300); });
         clearInterval(ramp);
-        if(!fmState.cancel && seg.outro){ fmSetLine("BACK-ANNOUNCE", seg.outro); await fmSpeak(seg.outro); }
+        if(!fmState.cancel && !fmState.skip && seg.outro){ fmSetLine("BACK-ANNOUNCE", seg.outro); await fmSpeak(seg.outro); }
       }catch(_){ fmSetLine("ON AIR", "Apple Music refused that one. Typical. Moving on."); await fmSpeak("Apple Music refused that one. Typical. Moving on."); }
       return;
     }
     const a = new Audio(tr.url); fmState.audio=a; a.volume = seg.intro?0.15:0.9;
     a.play().catch(()=>{});
-    if(seg.intro){ fmSetLine("ON AIR", seg.intro); await fmSpeak(seg.intro); if(fmState.cancel){ a.pause(); return; } }
+    if(seg.intro){ fmSetLine("ON AIR", seg.intro); await fmSpeak(seg.intro); if(fmState.cancel||fmState.skip){ a.pause(); return; } }
     fmSetLine("NOW PLAYING", tr.title);
     const ramp=setInterval(()=>{ a.volume=Math.min(0.95,a.volume+0.12); if(a.volume>=0.95) clearInterval(ramp); },100);
     await new Promise(res=>{ a.onended=res; a.onerror=res;
-      const poll=setInterval(()=>{ if(fmState.cancel||a.ended){ try{ if(fmState.cancel) a.pause(); }catch(_){} clearInterval(poll); res(); } },200); });
+      const poll=setInterval(()=>{ if(fmState.cancel||fmState.skip||a.ended){ try{ if(fmState.cancel||fmState.skip) a.pause(); }catch(_){} clearInterval(poll); res(); } },200); });
     clearInterval(ramp); fmState.audio=null;
-    if(!fmState.cancel && seg.outro){ fmSetLine("BACK-ANNOUNCE", seg.outro); await fmSpeak(seg.outro); }
+    if(!fmState.cancel && !fmState.skip && seg.outro){ fmSetLine("BACK-ANNOUNCE", seg.outro); await fmSpeak(seg.outro); }
   } else {
     fmSetLine(seg.type==="news"?"NEWS DESK":"ON AIR", seg.text);
     await fmSpeak(seg.text);
   }
 }
+function fmFindMusic(from,dir){
+  for(let j=from+dir; j>=0 && j<fmState.segs.length; j+=dir) if(fmState.segs[j].type==="music") return j;
+  return -1;
+}
+// ⏮/⏭ while live: flag the jump; the running segment's speech watcher and
+// playback polls see it and wind up, then fmRun retargets the index.
+function fmSkip(dir){
+  if(fmState.status!=="live") return;
+  fmState.skip=dir;
+  if(window.speechSynthesis) try{ speechSynthesis.cancel(); }catch(_){}
+}
 async function fmRun(){
-  for(let i=0;i<fmState.segs.length;i++){
-    if(fmState.cancel) break;
-    fmState.idx=i; fmMarkRow(i);
+  let i=0;
+  while(i<fmState.segs.length && !fmState.cancel){
+    fmState.idx=i; fmMarkRow(i); fmState.skip=0;
     await fmPlaySeg(fmState.segs[i]);
+    if(fmState.cancel) break;
+    if(fmState.skip>0){ const j=fmFindMusic(i,1); i=j>=0?j:i+1; }        // ⏭ next track (or just move on)
+    else if(fmState.skip<0){ const j=fmFindMusic(i,-1); i=j>=0?j:i; }     // ⏮ previous track (or replay)
+    else i++;
   }
+  fmState.skip=0;
   if(!fmState.cancel){ fmState.status="stopped"; fmState.idx=-1; fmState.line="That's the loop. Miss me already? Go live again."; render(); }
 }
 function fmFallback(){
@@ -771,11 +793,13 @@ async function fmGoLive(){
   { let last=0; const n=fmState.tracks.length;
     segs.forEach(s=>{ if(s.type!=="music") return; let i=Number(s.track);
       if(!(i>=1&&i<=n)) i=Math.min(n,last+1); s.track=i; last=i; }); }
+  // On air: tuck the setup sections away so the running order + transport lead.
+  fmState.fold.tracks=true; fmState.fold.sass=true;
   fmState.segs=segs; fmState.status="live"; render();
   fmRun();
 }
 function fmStop(){
-  fmState.cancel=true;
+  fmState.cancel=true; fmState.skip=0;
   if(window.speechSynthesis) speechSynthesis.cancel();
   if(_mk){ try{ _mk.stop(); }catch(_){} }
   if(fmState.audio){ try{ fmState.audio.pause(); }catch(_){} fmState.audio=null; }
@@ -1206,19 +1230,22 @@ function render(){
         <div class="hint" id="fmtype" style="letter-spacing:.14em;text-transform:uppercase;font-family:'JetBrains Mono',monospace">${fmState.status==="live"?"ON AIR":"STANDBY"}</div>
         <p id="fmline" style="margin:6px 0 0;font-size:14.5px;line-height:1.5">${esc(fmState.line)}</p>
       </div></div>
-      <div class="set-row"><span class="set-label">Tracks</span><div class="set-body">
+      <div class="set-row"><span class="set-label" data-fmfold="tracks" role="button" aria-expanded="${!fmState.fold.tracks}" style="cursor:pointer">Tracks ${fmState.fold.tracks?"▸":"▾"}</span><div class="set-body">
+        ${fmState.fold.tracks?`<div class="hint" data-fmfold="tracks" style="cursor:pointer;margin:0">${fmState.tracks.length} track${fmState.tracks.length===1?"":"s"}${fmState.amPlaylist?" · Apple Music":""} — tap to expand</div>`:`
         ${fmState.tracks.map((t,i)=>`<div class="row" style="justify-content:space-between;margin-top:4px"><span style="font-size:13px">${esc(t.title)}</span><button class="desk-rm" data-fmrm="${i}">✕</button></div>`).join("")||`<div class="set-empty">Add a few audio files — they never leave your device.</div>`}
         <div class="row" style="margin-top:8px"><button class="linkbtn" id="fmadd">＋ Add files</button><button class="linkbtn" id="fmam">${fmState.playlists?"↻ Reconnect Apple Music":" Connect Apple Music"}</button><input id="fmfiles" type="file" accept="audio/*" multiple style="display:none"></div>
-        ${fmState.playlists && fmState.playlists.length ? `<div class="row" style="margin-top:8px;align-items:center;gap:7px"><span class="hint" style="margin:0">Playlist</span><select class="mini-sel" id="fmpl"><option value="">choose…</option>${fmState.playlists.map(p=>`<option value="${esc(p.id)}" ${fmState.amPlaylist===p.id?"selected":""}>${esc(p.name)}</option>`).join("")}</select></div>`:""}
+        ${fmState.playlists && fmState.playlists.length ? `<div class="row" style="margin-top:8px;align-items:center;gap:7px"><span class="hint" style="margin:0">Playlist</span><select class="mini-sel" id="fmpl"><option value="">choose…</option>${fmState.playlists.map(p=>`<option value="${esc(p.id)}" ${fmState.amPlaylist===p.id?"selected":""}>${esc(p.name)}</option>`).join("")}</select></div>`:""}`}
       </div></div>
-      <div class="set-row"><span class="set-label">Attitude</span><div class="set-body"><div class="chips">
+      <div class="set-row"><span class="set-label" data-fmfold="sass" role="button" aria-expanded="${!fmState.fold.sass}" style="cursor:pointer">Attitude ${fmState.fold.sass?"▸":"▾"}</span><div class="set-body">
+        ${fmState.fold.sass?`<div class="hint" data-fmfold="sass" style="cursor:pointer;margin:0">${FM_SASS[fmState.sass].label} — tap to change</div>`:`<div class="chips">
         ${FM_SASS.map((sx,i)=>`<button class="chip ${i===fmState.sass?"":"off"}" data-fmsass="${i}">${i===fmState.sass?"✓ ":""}${sx.label}</button>`).join("")}
-      </div></div></div>
-      ${fmState.segs.length?`<div class="set-row"><span class="set-label">Running order</span><div class="set-body" id="fmorder">
-        ${fmState.segs.map((sg,i)=>`<div class="hint fm-row${i===fmState.idx?" fm-on":""}" style="margin-top:3px">${sg.type==="music"?"♪":sg.type==="news"?"◆":"❯"} ${esc(sg.type==="music"?((fmState.tracks[(sg.track||1)-1]||{}).title||"track"):(sg.text||"").slice(0,70))}</div>`).join("")}
+      </div>`}
+      </div></div>
+      ${fmState.segs.length?`<div class="set-row"><span class="set-label" data-fmfold="order" role="button" aria-expanded="${!fmState.fold.order}" style="cursor:pointer">Running order ${fmState.fold.order?"▸":"▾"}</span><div class="set-body" id="fmorder">
+        ${fmState.fold.order?`<div class="hint" data-fmfold="order" style="cursor:pointer;margin:0">${fmState.segs.length} segments — tap to expand</div>`:fmState.segs.map((sg,i)=>`<div class="hint fm-row${i===fmState.idx?" fm-on":""}" style="margin-top:3px">${sg.type==="music"?"♪":sg.type==="news"?"◆":"❯"} ${esc(sg.type==="music"?((fmState.tracks[(sg.track||1)-1]||{}).title||"track"):(sg.text||"").slice(0,70))}</div>`).join("")}
       </div></div>`:""}
       <div class="set-row"><span class="set-label"></span><div class="set-body">
-        ${fmState.status==="live"?`<button class="refresh" id="fmstop" style="background:var(--down);color:#fff">■ Stop</button>`
+        ${fmState.status==="live"?`<div class="row" style="gap:8px;align-items:center"><button class="icbtn" id="fmprev" aria-label="Previous track" title="Previous track">⏮</button><button class="refresh" id="fmstop" style="background:var(--down);color:#fff">■ Stop</button><button class="icbtn" id="fmnext" aria-label="Next track" title="Next track">⏭</button></div>`
           :`<button class="refresh" id="fmgo" ${fmState.status==="loading"?"disabled":""}>${fmState.status==="loading"?"Tuning in…":"▶ Go live"}</button>`}
         <div class="hint" style="margin-top:7px">Your files + today's real headlines, hosted by an AI with attitude. The voice is your browser's TTS — deadpan is the joke.</div>
         ${fmState.feedSrc?`<div class="hint" style="margin-top:4px">Headlines this show: ${fmState.feedSrc==="personal"?"your personalised desks":"the shared wire — your desks hadn't filed a fresh edition, so the host grabbed the newsroom copy"}.</div>`:""}
@@ -1501,6 +1528,9 @@ function wire(){
   $("fmpl") && ($("fmpl").onchange = ()=> fmPickPlaylist($("fmpl").value));
   $("fmgo") && ($("fmgo").onclick = fmGoLive);
   $("fmstop") && ($("fmstop").onclick = fmStop);
+  $("fmprev") && ($("fmprev").onclick = ()=> fmSkip(-1));
+  $("fmnext") && ($("fmnext").onclick = ()=> fmSkip(1));
+  document.querySelectorAll("[data-fmfold]").forEach(el=> el.onclick=()=>{ const k=el.dataset.fmfold; fmState.fold[k]=!fmState.fold[k]; render(); });
 
   document.querySelectorAll("[data-filter]").forEach(b=> b.onclick = ()=>{ state.filter=b.dataset.filter; render(); });
   // Drag-to-reorder filter pills (desktop; touch uses the ▲▼ in Settings).
