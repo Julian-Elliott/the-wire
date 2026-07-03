@@ -1,5 +1,5 @@
 /* =========================================================================
-   THE WIRE — Jack's edition · Cloudflare Worker
+   THE WIRE · Cloudflare Worker
    - Generates a daily briefing across a set of "desks" (built-in + custom)
    - Anonymous visitors get a shared briefing (cheap, one copy in KV)
    - Once a visitor customises (swipes / adds desks), they get a PERSONAL
