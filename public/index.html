@@ -188,7 +188,7 @@ a{ color:inherit; text-decoration:none; }
 .why-i{ display:inline-flex; align-items:center; justify-content:center; min-width:17px; height:18px; border-radius:9px; border:1px solid var(--line); background:transparent; color:var(--faint); font-family:'JetBrains Mono',monospace; font-size:9.5px; font-style:italic; cursor:pointer; user-select:none; padding:0 8px; position:relative; }
 .why-i::after, .listen::after, .rtip-x::after{ content:""; position:absolute; inset:-11px; }   /* 44px-ish hit slop on daily-use controls */
 .why-i:hover, .why-i[aria-expanded="true"]{ color:var(--amber); border-color:var(--amber); }
-.why-pop{ margin:2px 0 10px; font-size:12.5px; line-height:1.45; color:var(--muted); border-top:1px dashed var(--line); padding-top:8px; }
+.why-pop{ margin:2px 0 2px; font-size:12.5px; line-height:1.45; color:var(--muted); border-top:1px dashed var(--line); padding-top:7px; }
 .why-pop[hidden]{ display:none; }
 .why-pop b{ font-family:'JetBrains Mono',monospace; font-size:9px; letter-spacing:.16em; text-transform:uppercase; color:var(--amber); margin-right:7px; font-weight:600; }
 .card-foot{ display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
@@ -642,6 +642,8 @@ const FM_SASS = [
   { id:"savage", label:"Savage" }, { id:"unhinged", label:"Unhinged" },
 ];
 const fmOn = ()=>{ try{ return localStorage.getItem("jackwire:fm")==="1"; }catch(_){ return false; } };
+// #40: the why footer is always-or-never (settings toggle), no per-card button.
+const whyOn = ()=>{ try{ return localStorage.getItem("jackwire:why")!=="0"; }catch(_){ return true; } };
 const fmState = { open:false, tracks:[], status:"idle", segs:[], idx:-1, audio:null, cancel:false,
   line:"Off air. Press GO LIVE and let's get this over with.",
   sass:(()=>{ try{ const n=Number(localStorage.getItem("jackwire:fmsass")); return n>=0&&n<4?n:2; }catch(_){ return 2; } })() };
@@ -1077,7 +1079,6 @@ function render(){
         <div class="sw nope">◂ Not for me</div>
         <div class="card-top">
           <span class="cat" style="color:${ac}">${esc(info.label)}</span>
-          ${it.why?`<button class="why-i" type="button" aria-expanded="false" aria-label="Why it matters">why</button>`:""}
           ${isNew(it)?`<span class="new-pill">NEW</span>`:""}
           <span class="card-meta">
             ${it.changePct?`<span class="move" style="color:${dirCol}">${arrow} ${esc(it.changePct)}</span>`:""}
@@ -1090,7 +1091,7 @@ function render(){
           <div class="card-txt"><h3 class="h">${titleHtml}</h3>${it.summary?`<p class="p">${esc(it.summary)}</p>`:""}</div>
         </div>`:`<h3 class="h">${titleHtml}</h3>
         ${it.summary?`<p class="p">${esc(it.summary)}</p>`:""}`}
-        ${it.why?`<div class="why-pop" hidden><b>Why it matters</b>${esc(it.why)}</div>`:""}
+        ${(it.why && whyOn())?`<div class="why-pop">${esc(it.why)}</div>`:""}
       </article>`;
     }).join("");
 
@@ -1152,6 +1153,10 @@ function render(){
             ${[["","desk defaults"],["24h","24 hours"],["48h","48 hours"],["1w","week"],["1m","month"]]
               .map(([v,l])=>`<option value="${v}" ${(state.profile.window||"")===v?"selected":""}>${l}</option>`).join("")}
           </select>
+        </div>
+        <div class="row" style="margin-top:8px;align-items:center;gap:8px">
+          <span class="hint" style="margin:0">“Why it matters” under stories</span>
+          <button class="linkbtn" id="whytoggle">${whyOn()?"Always":"Never"}</button>
         </div>
         <div class="row" style="margin-top:8px"><button class="linkbtn" id="reset-learn">Reset what I’ve learned</button></div>
       </div></div>
@@ -1519,13 +1524,6 @@ function wire(){
   document.querySelectorAll("[data-preview]").forEach(b=> b.onclick = (e)=>{ e.stopPropagation(); playPreview(b.dataset.preview); });
   document.querySelectorAll("[data-up]").forEach(b=> b.onclick = ()=> moveDesk(b.dataset.up, -1));
   document.querySelectorAll("[data-down]").forEach(b=> b.onclick = ()=> moveDesk(b.dataset.down, 1));
-  document.querySelectorAll(".why-i").forEach(b=> b.onclick = (e)=>{
-    e.stopPropagation();
-    const card = b.closest(".card"); const pop = card && card.querySelector(".why-pop"); if(!pop) return;
-    const open = pop.hasAttribute("hidden");
-    if(open) pop.removeAttribute("hidden"); else pop.setAttribute("hidden","");
-    b.setAttribute("aria-expanded", open ? "true" : "false");
-  });
   document.querySelectorAll(".listen[data-listen]").forEach(b=> b.onclick = (e)=>{ e.stopPropagation(); toggleListen(b.getAttribute("data-listen")); });   // [data-listen] only — the style-taster ▶s share the class but bind to playPreview
   syncListenUI();
   const rtipX=document.getElementById("rtip-x");
@@ -1568,6 +1566,7 @@ function wire(){
     saveRead(); render();
   });
   $("show-earlier") && ($("show-earlier").onclick = ()=>{ state.showEarlier = true; render(); });
+  $("whytoggle") && ($("whytoggle").onclick = ()=>{ try{ localStorage.setItem("jackwire:why", whyOn()?"0":"1"); }catch(_){} render(); });
 
   // Record "seen" only when a card DWELLS on screen (~1.2s at 60% visible) —
   // fast scrolling isn't reading, and a skim-then-reload must not hide the
