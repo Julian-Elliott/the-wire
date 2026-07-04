@@ -747,7 +747,15 @@ async function fmGoLive(){
     const r = await fetch("/api/dj", { method:"POST", headers:{"content-type":"application/json"},
       body: JSON.stringify({ tracks: fmState.tracks.map(t=>t.title), sass: FM_SASS[fmState.sass].id }) });
     const d = await r.json();
-    if(d && Array.isArray(d.segments) && d.segments.length) segs=d.segments;
+    if(d && Array.isArray(d.segments) && d.segments.length){
+      segs=d.segments;
+      if(d.newsroom && d.newsroom.source==="personal"){
+        fmState.line = "On air with your desks: "+(d.newsroom.desks||[]).slice(0,5).join(", ")+((d.newsroom.desks||[]).length>5?"…":"");
+      } else if(d.newsroom){
+        state.toast={msg:"Your personal feed wasn't available — the host is reading the shared desk."};
+        clearTimeout(window.__tt); window.__tt=setTimeout(()=>{state.toast=null;render();},6000);
+      }
+    }
     else if(d && d.error){ state.toast={msg:d.error+" — running the demo show instead."};
       clearTimeout(window.__tt); window.__tt=setTimeout(()=>{state.toast=null;render();},6000); }
   }catch(_){ state.toast={msg:"Couldn't reach the newsroom — running the demo show instead."};

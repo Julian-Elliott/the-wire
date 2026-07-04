@@ -1836,10 +1836,23 @@ ${items.join("\n")}
         };
         const sass = DJ_SASS[String(body.sass)] || DJ_SASS.savage;
         const t = await resolveTarget(env, headerUid, !!sUid);
-        const feed = (await readJSON(env, t.writeKeys.latest)) || (await readJSON(env, SHARED_KEY));
-        const news = ((feed && feed.items) || []).slice(0, 6).map(i => `- ${i.title}: ${i.summary}`).join("\n");
+        const personalFeed = t.key !== "shared" ? await readJSON(env, t.writeKeys.latest) : null;
+        const feed = personalFeed || (await readJSON(env, SHARED_KEY));
+        const source = personalFeed ? "personal" : "shared";
+        const labelOf = id => { const d = ((feed && feed.desks) || []).find(x => x.id === id); return (d && d.label) || id; };
+        // Sweep the reader's DESKS — one top story per desk (salience-first),
+        // round-robin up to 8 — instead of whatever six items merged newest,
+        // which could cluster on two desks and read as "not my news".
+        const byDesk = {};
+        for (const it of ((feed && feed.items) || [])) (byDesk[it.category] = byDesk[it.category] || []).push(it);
+        for (const c of Object.keys(byDesk)) byDesk[c].sort((a, b) => (b.salience || 3) - (a.salience || 3));
+        const picks = [];
+        for (let round = 0; picks.length < 8 && round < 3; round++) {
+          for (const c of Object.keys(byDesk)) { const it = byDesk[c][round]; if (it && picks.length < 8) picks.push(it); }
+        }
+        const news = picks.map(i => `- [${labelOf(i.category)}] ${i.title}: ${i.summary}`).join("\n");
         const prompt = `You produce "Wire FM", the after-hours radio mode of a personal news app. Write a short running order for a SARCASTIC, self-aware AI radio DJ. Personality: ${sass}. Sharp and genuinely funny, never cruel: no jabs at identity or looks, no slurs, mild language at most; under the attitude the host is secretly fond of the listener. ${ukRule} House style: no em or en dashes (every line is spoken aloud). Do NOT use web search.
-TODAY'S REAL HEADLINES (never invent news; riff on these only):
+TODAY'S REAL HEADLINES from the listener's own desks, tagged [Desk] (never invent news; riff on these only, and NAME the desk naturally when you introduce its story, e.g. "your Cardiff desk reckons..."):
 ${news || "- (a suspiciously quiet news day: complain about it at length)"}
 LISTENER'S QUEUE (use each once, in order): ${tracks.map((x, i) => `${i + 1}. "${x}"`).join(" ")}
 Shape: cold open (greeting, time-of-day feel, a tease or a complaint) then news with editorial snark, then intro + back-announce each track with attitude, 1-2 talk breaks between; spoken lines tight, radio moves fast.
@@ -1855,7 +1868,7 @@ Return ONLY JSON: {"segments":[{"type":"talk","text":"..."},{"type":"news","text
           intro: s.intro ? deDash(String(s.intro)).slice(0, 400) : "",
           outro: s.outro ? deDash(String(s.outro)).slice(0, 400) : "",
         })).filter(s => s.text || s.type === "music");
-        return json({ segments });
+        return json({ segments, newsroom: { source, desks: [...new Set(picks.map(i => labelOf(i.category)))], items: picks.length } });
       } catch (e) { return json({ error: "dj failed" }, 500); }
     }
 
