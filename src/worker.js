@@ -762,6 +762,11 @@ async function resolveTarget(env, u, liveActive) {
 // briefing here. Dormant unless INGEST_SECRET is set, so deploys are safe
 // before the routine exists. See routines/SETUP.md.
 const ingestEnabled = env => !!(env.INGEST_SECRET && String(env.INGEST_SECRET).length >= 16);
+// Audio kill-switch (AUDIO_PAUSED="true" in wrangler.toml [vars]): blocks every
+// path that could spend ElevenLabs credits (renders, prewarms, tasters, beats,
+// readouts) plus Wire FM, while the UI shows a friendly "back soon" marker.
+// Flip to "false" (or remove) + deploy to bring everything back.
+const audioPaused = env => String(env.AUDIO_PAUSED || "").toLowerCase() === "true";
 
 function timingSafeEqual(a, b) {
   a = String(a || ""); b = String(b || "");
@@ -1004,6 +1009,7 @@ const BEATS = {
 // to mp3_44100_128 to MATCH the dialogue: the Music v2 default is 48kHz, which would
 // play at the wrong pitch once byte-concatenated with the 44.1kHz dialogue.
 async function ensureBeat(env, kind) {
+  if (audioPaused(env)) return null;
   const b = BEATS[kind];
   if (!b || !env.WIRE_AUDIO || !env.ELEVENLABS_API_KEY) return null;
   try {
@@ -1136,6 +1142,7 @@ async function podcastKey(turns, date) {
 // never cached and every play re-rendered from cold). A short KV lock keeps
 // concurrent triggers (page loads + play polls) from double-rendering.
 async function ensurePodcastRendered(env, turns, date, key) {
+  if (audioPaused(env)) return null;
   if (!env.WIRE_AUDIO || !env.ELEVENLABS_API_KEY || !Array.isArray(turns) || !turns.length) return null;
   key = key || await podcastKey(turns, date);
   const lockKey = `podcast:lock:${key}`;
@@ -1588,6 +1595,7 @@ export default {
     // episode with them). Kept separate because beats are stereo and the voices are
     // mono; concatenating the two channel modes pitches the voice up in some players.
     if (url.pathname === "/api/beat") {
+      if (audioPaused(env)) return json({ error: "audio paused", paused: true }, 503);
       if (!env.ELEVENLABS_API_KEY || !env.WIRE_AUDIO) return json({ error: "audio not configured" }, 404);
       const kind = url.searchParams.get("k") === "outro" ? "outro" : "intro";
       const bytes = await ensureBeat(env, kind);
@@ -1599,6 +1607,7 @@ export default {
     // through the real dialogue pipeline, then served from R2 forever — the
     // fixed key set (4 styles) bounds unauthenticated render cost.
     if (url.pathname === "/api/style-preview") {
+      if (audioPaused(env)) return json({ error: "Tasters are paused while the voice budget refills — back soon.", paused: true }, 503);
       if (!env.ELEVENLABS_API_KEY || !env.WIRE_AUDIO) return json({ error: "audio not configured" }, 404);
       const s = String(url.searchParams.get("s") || "");
       const sample = STYLE_PREVIEWS[s];
@@ -1620,6 +1629,7 @@ export default {
     // builds 3x/day; the day's latest snapshot wins). Follow-by-URL in Apple
     // Podcasts / Overcast / Pocket Casts, or submit it properly later.
     if (url.pathname === "/feed.xml") {
+      if (audioPaused(env)) return new Response("Feed paused — back soon.", { status: 503, headers: { "retry-after": "86400" } });
       if (!env.WIRE_KV || !env.WIRE_AUDIO) return new Response("Not found", { status: 404 });
       const xesc = s => String(s == null ? "" : s).replace(/[<>&'"]/g, c => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", "'": "&apos;", '"': "&quot;" }[c]));
       const origin = `https://${url.hostname}`;
@@ -1660,6 +1670,7 @@ ${items.join("\n")}
     // A dated shared episode with a STABLE URL (the R2 key hash changes per
     // script, so the feed points here). Range-capable — podcast apps seek.
     if (url.pathname === "/api/podcast/episode") {
+      if (audioPaused(env)) return json({ error: "audio paused", paused: true }, 503);
       if (!env.WIRE_KV || !env.WIRE_AUDIO) return json({ error: "not configured" }, 404);
       const d = String(url.searchParams.get("d") || "");
       if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return json({ error: "bad date" }, 400);
@@ -1700,7 +1711,7 @@ ${items.join("\n")}
     // ---- Sign in with Apple endpoints (no-ops unless configured) ----------
     if (url.pathname === "/api/me") {
       const s = await verifyToken(env, getCookie(request, "sess"));
-      return json({ appleEnabled: appleEnabled(env), signedIn: !!s, email: (s && s.email) || null, name: (s && s.name) || null });
+      return json({ appleEnabled: appleEnabled(env), signedIn: !!s, email: (s && s.email) || null, name: (s && s.name) || null, audioPaused: audioPaused(env) });
     }
     if (url.pathname === "/api/profile" && request.method === "GET") {
       // Access is bound to the caller's identity: a signed-in session reads only
@@ -1812,6 +1823,7 @@ ${items.join("\n")}
     // no web search — so signed-in + throttled like desk-preview. The client
     // speaks it with browser TTS (deadpan is the joke) and plays local files.
     if (url.pathname === "/api/dj" && request.method === "POST") {
+      if (audioPaused(env)) return json({ error: "Wire FM is off air while the audio budget refills — the overlord is furious. Back soon.", paused: true }, 503);
       if (!sUid) return json({ error: "Sign in with Apple to go on air." }, 401);
       try {
         if (env.WIRE_KV) {
@@ -1877,6 +1889,7 @@ Return ONLY JSON: {"segments":[{"type":"talk","text":"..."},{"type":"news","text
     // an unauth caller can't burn credits on arbitrary text (text comes from the
     // feed). GET /api/listen/<itemId> — the client passes its uid via x-user-id.
     if (url.pathname.startsWith("/api/listen/") && request.method === "GET") {
+      if (audioPaused(env)) return json({ error: "audio paused", paused: true }, 503);
       if (!env.ELEVENLABS_API_KEY || !env.WIRE_AUDIO) return json({ error: "audio not configured" }, 404);
       try {
         const itemId = decodeURIComponent(url.pathname.slice("/api/listen/".length));
@@ -1905,6 +1918,7 @@ Return ONLY JSON: {"segments":[{"type":"talk","text":"..."},{"type":"news","text
     // A personalised listener gets THEIR episode, falling back to the shared one if
     // their build hasn't produced a script yet. ?meta=1 returns readiness JSON.
     if (url.pathname === "/api/podcast/today" && request.method === "GET") {
+      if (audioPaused(env)) return url.searchParams.get("meta") === "1" ? json({ ready: false, paused: true }) : json({ error: "audio paused", paused: true }, 503);
       if (!env.ELEVENLABS_API_KEY || !env.WIRE_AUDIO) return json({ error: "audio not configured" }, 404);
       try {
         const t = await resolveTarget(env, headerUid, !!sUid);

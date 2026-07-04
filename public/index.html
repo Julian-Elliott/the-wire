@@ -482,6 +482,7 @@ async function putProfile(regenerate){
 async function fetchMe(){
   try{ const r = await fetch("/api/me"); const d = await r.json();
     state.auth = { enabled: !!d.appleEnabled, signedIn: !!d.signedIn, email: d.email||null, name: d.name||null };
+    state.paused = !!d.audioPaused;
   }catch(_){}
 }
 // Convert the server's profile shape ({desks:{enabled,custom}}) to the client's
@@ -1081,7 +1082,7 @@ function render(){
           <span class="card-meta">
             ${it.changePct?`<span class="move" style="color:${dirCol}">${arrow} ${esc(it.changePct)}</span>`:""}
             <span class="src card-src">${esc(it.source || domainOf(it.url) || "—")}${it.addedAt?` · ${relAge(it.addedAt)}`:""}</span>
-            <button class="listen" data-listen="${esc(it.id)}" type="button" aria-label="Listen to this">▶</button>
+            ${state.paused?"":`<button class="listen" data-listen="${esc(it.id)}" type="button" aria-label="Listen to this">▶</button>`}
           </span>
         </div>
         ${it.img?`<div class="card-body">
@@ -1133,12 +1134,12 @@ function render(){
         ${mutedTypes().map(t=>`<button class="chip muted" data-restore="${esc(t)}">${esc(t)} ✕</button>`).join("")}
       </div></div></div>
       <div class="set-row"><span class="set-label">Podcast</span><div class="set-body">
-        <div class="hint">Pick the show's style — tap ▶ for a taster. Your next episode is produced in that register.</div>
+        ${state.paused?`<div class="hint" style="color:var(--amber)">Paused — voice budget spent for the month. Your style choice is saved and applies when episodes return.</div>`:`<div class="hint">Pick the show's style — tap ▶ for a taster. Your next episode is produced in that register.</div>`}
         ${Object.entries(SHOWS).map(([id,s])=>{
           const cur = state.profile.show || "briefing";
           return `<div class="row" style="align-items:center;gap:8px;margin-top:7px">
             <button class="chip ${cur===id?"":"off"}" data-show="${id}">${cur===id?"✓ ":""}${s.label}</button>
-            <button class="listen" data-preview="${id}" type="button" aria-label="Preview ${s.label}">▶</button>
+            ${state.paused?"":`<button class="listen" data-preview="${id}" type="button" aria-label="Preview ${s.label}">▶</button>`}
             <span class="hint" style="margin:0">${s.desc}</span>
           </div>`;
         }).join("")}
@@ -1155,7 +1156,7 @@ function render(){
         <div class="row" style="margin-top:8px"><button class="linkbtn" id="reset-learn">Reset what I’ve learned</button></div>
       </div></div>
       <div class="set-row"><span class="set-label">Wire FM</span><div class="set-body">
-        <div class="hint">An after-hours radio mode: your own tracks, today's real headlines, an AI host with attitude. Experimental — off by default.</div>
+        <div class="hint">An after-hours radio mode: your own tracks, today's real headlines, an AI host with attitude. Experimental — off by default.${state.paused?' <span style="color:var(--amber)">Currently off air (voice budget) — back soon.</span>':''}</div>
         <div class="row" style="margin-top:8px"><button class="linkbtn" id="fmtoggle">${fmOn()?"Turn off":"Turn on"}</button></div>
       </div></div>
       ${state.auth.enabled ? `<div class="set-row"><span class="set-label">Account</span><div class="set-body">
@@ -1195,7 +1196,7 @@ function render(){
     <div class="settings" id="fmpanel">
       <div class="set-row"><span class="set-label" style="color:${fmState.status==="live"?"var(--red)":"var(--muted)"}">${fmState.status==="live"?"● ON AIR":"WIRE FM"}</span><div class="set-body">
         <div class="hint" id="fmtype" style="letter-spacing:.14em;text-transform:uppercase;font-family:'JetBrains Mono',monospace">${fmState.status==="live"?"ON AIR":"STANDBY"}</div>
-        <p id="fmline" style="margin:6px 0 0;font-size:14.5px;line-height:1.5">${esc(fmState.line)}</p>
+        <p id="fmline" style="margin:6px 0 0;font-size:14.5px;line-height:1.5">${state.paused?"OFF AIR — the voice budget is spent and the overlord is furious about the interruption. Back soon.":esc(fmState.line)}</p>
       </div></div>
       <div class="set-row"><span class="set-label">Tracks</span><div class="set-body">
         ${fmState.tracks.map((t,i)=>`<div class="row" style="justify-content:space-between;margin-top:4px"><span style="font-size:13px">${esc(t.title)}</span><button class="desk-rm" data-fmrm="${i}">✕</button></div>`).join("")||`<div class="set-empty">Add a few audio files — they never leave your device.</div>`}
@@ -1209,7 +1210,8 @@ function render(){
         ${fmState.segs.map((sg,i)=>`<div class="hint fm-row${i===fmState.idx?" fm-on":""}" style="margin-top:3px">${sg.type==="music"?"♪":sg.type==="news"?"◆":"❯"} ${esc(sg.type==="music"?((fmState.tracks[(sg.track||1)-1]||{}).title||"track"):(sg.text||"").slice(0,70))}</div>`).join("")}
       </div></div>`:""}
       <div class="set-row"><span class="set-label"></span><div class="set-body">
-        ${fmState.status==="live"?`<button class="refresh" id="fmstop" style="background:var(--down);color:#fff">■ Stop</button>`
+        ${state.paused?`<button class="refresh" disabled style="opacity:.5;cursor:default">OFF AIR</button>`
+          :fmState.status==="live"?`<button class="refresh" id="fmstop" style="background:var(--down);color:#fff">■ Stop</button>`
           :`<button class="refresh" id="fmgo" ${fmState.status==="loading"?"disabled":""}>${fmState.status==="loading"?"Tuning in…":"▶ Go live"}</button>`}
         <div class="hint" style="margin-top:7px">Your files + today's real headlines, hosted by an AI with attitude. The voice is your browser's TTS — deadpan is the joke.</div>
       </div></div>
@@ -1228,7 +1230,13 @@ function render(){
     ${settingsHtml}${fmHtml}
     ${(sumLine || nNew) ? `<section class="hero"><p class="sum">${esc(sumLine)}${nNew?`${sumLine?" · ":""}<span style="color:var(--amber)">${nNew} new</span>`:""}</p></section>` : ""}
     <nav class="filters"><div class="filters-inner">${filterBtns}</div></nav>
-    <section class="podcast" id="podbar">
+    ${state.paused?`<section class="podcast" style="opacity:.75">
+      <div class="pod-main">
+        <button class="pod-play" disabled style="opacity:.45;cursor:default">▶</button>
+        <div class="pod-meta"><div class="pod-title">The podcast is on a tea break</div>
+        <div class="pod-sub">This month's voice budget is spent — episodes and read-outs will be back shortly.</div></div>
+      </div>
+    </section>`:`<section class="podcast" id="podbar">
       <div class="pod-main">
       <button class="pod-play" id="podplay" type="button" aria-label="Play today's podcast">▶</button>
       <div class="pod-meta"><div class="pod-title">The latest on The Wire</div><div class="pod-sub" id="podsub">The day's news, talked through</div></div>
@@ -1249,7 +1257,7 @@ function render(){
         <span class="pod-time" id="poddur">–:––</span>
         <button class="pod-ctl" id="podrate" type="button" aria-label="Playback speed" style="width:auto;border-radius:999px;padding:0 11px;font-family:'JetBrains Mono',monospace;font-size:11px">${(window.__podRate||1)}×</button>
       </div>
-    </section>
+    </section>`}
     ${(()=>{ let seen=true; try{ seen=!!localStorage.getItem("jackwire:readertip"); }catch(_){};
       const ua=navigator.userAgent, safari=/safari/i.test(ua) && !/chrome|crios|fxios|edg|android/i.test(ua);
       return (seen||!safari)?"":`<div class="rtip" id="rtip"><div>Tip: open a headline, tap <b>aA</b> → <b>Use Reader Automatically</b>. Clean reading — one and done.</div><button class="rtip-x" id="rtip-x" aria-label="Dismiss">✕</button></div>`; })()}
