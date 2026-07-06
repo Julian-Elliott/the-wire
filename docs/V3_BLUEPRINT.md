@@ -210,6 +210,52 @@ Platform-leverage additions (docs/research/PLATFORM_LEVERAGE.md, July 2026): `NT
 
 ## 12. Ninety days, three phases
 
+> **Status — as built, 7 July 2026 (day 2 of the build).** The plan below is
+> the contract; this block is the scoreboard. Suite: 84 tests, CI deploying
+> on every push, infra flat $5/mo.
+>
+> **Phase 1 — largely DONE, weeks ahead of schedule:**
+> - ✅ Typed Worker + vitest; **regression suite from v2's audited failures
+>   went in first**, as promised (clamp mismatch, poll gate, lock semantics)
+> - ✅ NewsroomDO + ProfileDO (SQLite, decay alarm); embeddings at ingest
+>   (bge-m3) + saga clustering live
+> - ✅ Ingest validation in production: URL liveness, verbatim quotes
+>   (unverifiable = stripped), two-source rule with the second host fetched,
+>   per-outlet cap, recency gate, cross-day dedup
+> - ✅ KV migration run against production data (profile + 480 ledger rows)
+> - ✅ Web reader v1 at wire.databased.business; Sign in with Apple (JWKS,
+>   no client secret) + S2S revocation events; server-owned read_ledger
+> - ✅ Operational spine AHEAD of plan: watchdog + dead-man slot, nightly
+>   D1/KV exports + DO NDJSON sweep + restore drill, timebombs, budget
+>   alert, scoped CI token, dependabot; two adversarial review passes
+>   (19 + in-flight findings fixed pre-ship)
+> - ◐ Routine dual-post configured; **first live edition pending** (the
+>   empirical gate everything else waits on)
+> - ◐ Persona: internals live (signals→traits→decay, trust-ladder gate,
+>   migrated desk weights) — **HTTP/MCP tool surface + client-two test
+>   outstanding**
+> - ✗ Not yet: LLM render cells (L1-sharing pipeline), ranked L4 assembly,
+>   Web Push, reader settings/personalisation, routine-side prompt refactor
+>   (skills/, entity resolution, output badge, fixture suite, query_sagas)
+>
+> **Phase 2 — opportunistically pre-loaded:** WeatherKit key wired (dormant,
+> pending App ID) and promoted to primary weather source; email-relay domain
+> registered for digests; iOS capabilities confirmed checkbox-only;
+> Group Activities/SharePlay noted for the App ID.
+>
+> **v2 (the living lab):** un-paused on ElevenLabs Pro at 192 kbps;
+> podcast renders lazily on first play only (PODCAST_PREWARM off).
+>
+> **Julian's outstanding portal/dashboard items:** App ID
+> `business.databased.wire` (+WeatherKit, +Group Activities), push-protection
+> toggles, healthchecks.io checks + HC secrets, timebomb dates, `main`
+> ruleset; Access deferred until /dev exists.
+>
+> **Next up, in order:** verify the first dual-post edition → Persona tool
+> surface + preference-vector compass bars → first real trigger through the
+> interrupt gate (WeatherKit/TfL → ntfy) → v3-native routine prompt →
+> cut-over clock.
+
 **Phase 1 — Server foundation (weeks 1–4).**
 Monorepo; typed Worker skeleton with vitest, where the **first test suite is v2's audited silent-failure list** — dedup-key clamp mismatches (title 240 vs 160), the poll gate that meant Refresh never delivered, lock release-only-if-acquired semantics — written *before* feature code. NewsroomDO + ProfileDO with signals/traits tables and the decay alarm; Persona built and time-boxed inside week 2. KV migration script run against production data. Pipeline live: routine dual-posts L1 briefs and dominant-cell renders; Batch-API tail renderer; LLM-free L4 assembly; single rate-limit primitive replacing v2's throttle-key zoo; web reader at wire.databased.business; Web Push interrupts for Android/desktop. Routine-side (SOURCE_STRATEGIES 4.2/4.3/4.5/4.12/4.13/4.16): `briefing-prompt.md` refactored into per-source `skills/` playbooks with lightweight frontmatter; step-0 entity resolution (interests → concrete sources before any fetch); output contract hardened with a mandatory badge, named laws and a post-synthesis self-check; a 10–20-fixture prompt regression suite in CI that gates every prompt version — only then the caveman-style compression of mechanical sections; and the `query_sagas` tool replacing the fire-text avoid-list.
 *Acceptance criteria:* v2 regression suite green; web reader at full v2 parity (feed, settings, Sign in with Apple, audio playback); migrated profiles render correct personalised digests; Wire FM integrates against Persona as client two **in under a day** (else Persona folds back into the Wire worker); routine failure alarms visibly. Operational (PLATFORM_LEVERAGE §5): watchdog workflow live and pinging healthchecks.io; nightly D1/KV/DO backups landing in `wire-backups` including the DO NDJSON sweep; `/api/health` implements the full contract (store checks, heartbeats, spend month-to-date, version); the ~$8 budget alert set; the `new_sqlite_classes` migration deployed; Access on `/dev/*`; secret scanning + push protection manually confirmed on the repo; the `main` ruleset and `dependabot.yml` merged.
