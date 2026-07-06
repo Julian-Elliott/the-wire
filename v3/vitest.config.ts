@@ -14,6 +14,8 @@ export default defineConfig(async () => {
           bindings: {
             INGEST_SECRET: "test-secret",
             VALIDATE_LIVENESS: "off", // network validation is unit-tested with an injected fetcher
+            SESSION_SECRET: "test-session-secret",
+            APPLE_CLIENT_ID: "test.services.id",
             TEST_MIGRATIONS: migrations,
           },
         },

@@ -16,9 +16,13 @@ export interface Env {
   // Secrets (dormant-until-secret, V3_BLUEPRINT §9):
   INGEST_SECRET?: string; // arms POST /api/ingest
   NTFY_TOPIC?: string; // arms Worker-originated phone alerts (RUNBOOK §2)
+  SESSION_SECRET?: string; // arms Sign in with Apple (with APPLE_CLIENT_ID)
+  APPLE_DOMAIN_ASSOCIATION?: string; // served at /.well-known when set
 
   // Plain vars:
   VALIDATE_LIVENESS?: string; // "off" skips network validation (tests/dev only)
+  APPLE_CLIENT_ID?: string; // Services ID (aud) — public-safe, committed
+  APPLE_REDIRECT_URI?: string;
 }
 
 // Keys the Worker requires at boot. Secrets stay optional by design.

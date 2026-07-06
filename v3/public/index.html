@@ -52,6 +52,7 @@
 <header>
   <h1>THE WIRE<span class="v3">v3</span></h1>
   <span id="stamp">loading…</span>
+  <span id="who" style="margin-left:auto;font-size:13px;color:var(--dim)"></span>
 </header>
 <nav id="desks"></nav>
 <main id="feed"></main>
@@ -62,6 +63,29 @@
   const $ = (id) => document.getElementById(id);
   let items = [];
   let deskFilter = null;
+  let signedIn = false;
+
+  async function whoami() {
+    try {
+      const res = await fetch("/api/me");
+      if (res.ok) {
+        const me = await res.json();
+        signedIn = true;
+        $("who").innerHTML = `${esc(me.name || "signed in")} · <a href="/auth/apple/logout" style="color:var(--dim)">sign out</a>`;
+      } else {
+        $("who").innerHTML = '<a href="/auth/apple/login" style="color:var(--accent);text-decoration:none">Sign in with Apple</a>';
+      }
+    } catch { /* header stays quiet */ }
+  }
+
+  function markRead(item) {
+    if (!signedIn) return;
+    fetch("/api/read", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ url: item.url, desk: item.desk, title: item.title, state: "read" }),
+    }).catch(() => {});
+  }
 
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (ch) =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
@@ -128,6 +152,15 @@
     renderFeed();
   });
 
+  // Clicking through to a story marks it read in the server-side ledger.
+  $("feed").addEventListener("click", (e) => {
+    const a = e.target.closest("h2 a");
+    if (!a) return;
+    const item = items.find((i) => i.url === a.getAttribute("href"));
+    if (item) markRead(item);
+  });
+
+  whoami();
   load();
   setInterval(load, 5 * 60 * 1000);
 })();

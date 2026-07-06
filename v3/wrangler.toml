@@ -46,6 +46,13 @@ dataset = "wire_spend"
 [ai]
 binding = "AI"
 
+# Sign in with Apple (V3_BLUEPRINT §6): same Services ID as v2 — the Apple
+# portal lists BOTH domains' return URLs during coexistence (§11). Dormant
+# until the SESSION_SECRET secret is also set.
+[vars]
+APPLE_CLIENT_ID = "desk.databased.business"
+APPLE_REDIRECT_URI = "https://wire.databased.business/auth/apple/callback"
+
 [[kv_namespaces]]
 binding = "KV"
 id = "93c06c0cdcd74956867358f89fd17ef8"

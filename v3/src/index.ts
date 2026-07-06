@@ -1,5 +1,8 @@
 import { Hono } from "hono";
 import { REQUIRED_BINDINGS, type Env } from "./env";
+import {
+  appleEnabled, getCookie, randHex, signToken, verifyAppleIdToken, verifyToken,
+} from "./lib/auth";
 import { dedupeBatch, isStale, titleKey, urlKey } from "./lib/dedup";
 import { SUMMARY_MAX, TITLE_STORE_MAX, URL_STORE_MAX, cleanDeskId } from "./lib/text";
 import { embedTexts, embeddingInput } from "./lib/embed";
@@ -496,6 +499,128 @@ app.get("/", (c) =>
     blueprint: "https://github.com/Julian-Elliott/the-wire/blob/main/docs/V3_BLUEPRINT.md",
   }),
 );
+
+// ---- Sign in with Apple (V3_BLUEPRINT §6; ported from v2) ------------------
+// Dormant until APPLE_CLIENT_ID + SESSION_SECRET exist. No client secret:
+// Apple's form_post id_token is verified against Apple's JWKS directly.
+
+const SESSION_DAYS = 90;
+
+async function sessionOf(c: { req: { raw: Request }; env: Env }): Promise<{ uid: string; name: string | null } | null> {
+  const s = await verifyToken(c.env.SESSION_SECRET, getCookie(c.req.raw, "sess"));
+  return s && typeof s.uid === "string"
+    ? { uid: s.uid, name: typeof s.name === "string" ? s.name : null }
+    : null;
+}
+
+app.get("/auth/apple/login", async (c) => {
+  if (!appleEnabled(c.env)) return c.text("Sign-in not configured", 404);
+  const state = randHex();
+  const nonce = randHex();
+  const flow = await signToken(c.env.SESSION_SECRET!, {
+    state, nonce, exp: Math.floor(Date.now() / 1000) + 600,
+  });
+  const p = new URLSearchParams({
+    response_type: "code id_token",
+    response_mode: "form_post",
+    client_id: c.env.APPLE_CLIENT_ID!,
+    redirect_uri: c.env.APPLE_REDIRECT_URI ?? "https://wire.databased.business/auth/apple/callback",
+    scope: "name email",
+    state, nonce,
+  });
+  const h = new Headers({ Location: "https://appleid.apple.com/auth/authorize?" + p.toString() });
+  // SameSite=None: Apple's form_post is a cross-site POST — Lax would drop it.
+  h.append("Set-Cookie", `aflow=${encodeURIComponent(flow)}; HttpOnly; Secure; SameSite=None; Path=/; Max-Age=600`);
+  return new Response(null, { status: 302, headers: h });
+});
+
+app.post("/auth/apple/callback", async (c) => {
+  if (!appleEnabled(c.env)) return c.text("Sign-in not configured", 404);
+  let form: FormData;
+  try {
+    form = await c.req.raw.formData();
+  } catch {
+    return c.text("Bad request", 400);
+  }
+  const flow = await verifyToken(c.env.SESSION_SECRET, getCookie(c.req.raw, "aflow"));
+  if (!flow || flow.state !== form.get("state")) return c.text("Invalid sign-in state", 400);
+  const payload = await verifyAppleIdToken(c.env, form.get("id_token"), String(flow.nonce));
+  if (!payload?.sub) return c.text("Invalid identity token", 401);
+  const uid = "apple:" + payload.sub;
+
+  // Apple sends the user's name ONLY on first authorisation — capture it into
+  // the ProfileDO (v2 stored it in KV and prod shows none survived; see §11).
+  let name: string | null = null;
+  try {
+    const u = JSON.parse(String(form.get("user") ?? "null"));
+    if (u?.name) name = [u.name.firstName, u.name.lastName].filter(Boolean).join(" ").trim() || null;
+  } catch { /* no name payload */ }
+  await c.env.DB.prepare("INSERT OR IGNORE INTO users (uid, created_at) VALUES (?1, ?2)")
+    .bind(uid, new Date().toISOString())
+    .run();
+  const stub = c.env.PROFILES.get(c.env.PROFILES.idFromName(uid)) as unknown as {
+    importV2(p: { name?: string }): Promise<unknown>;
+    getConfig(): Promise<{ name: string | null; config: unknown }>;
+  };
+  if (name) await stub.importV2({ name });
+  else name = (await stub.getConfig()).name;
+
+  const sess = await signToken(c.env.SESSION_SECRET!, {
+    uid, name, email: payload.email ?? null,
+    exp: Math.floor(Date.now() / 1000) + 60 * 60 * 24 * SESSION_DAYS,
+  });
+  const h = new Headers({ Location: "/" });
+  h.append("Set-Cookie", `sess=${encodeURIComponent(sess)}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${60 * 60 * 24 * SESSION_DAYS}`);
+  h.append("Set-Cookie", "aflow=; HttpOnly; Secure; SameSite=None; Path=/; Max-Age=0");
+  return new Response(null, { status: 302, headers: h });
+});
+
+app.get("/auth/apple/logout", () => {
+  const h = new Headers({ Location: "/" });
+  h.append("Set-Cookie", "sess=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0");
+  return new Response(null, { status: 302, headers: h });
+});
+
+app.get("/.well-known/apple-developer-domain-association.txt", (c) =>
+  c.env.APPLE_DOMAIN_ASSOCIATION
+    ? c.text(c.env.APPLE_DOMAIN_ASSOCIATION)
+    : c.text("not configured", 404),
+);
+
+app.get("/api/me", async (c) => {
+  const sess = await sessionOf(c);
+  if (!sess) return c.json({ ok: false, signedIn: false }, 401);
+  return c.json({ ok: true, signedIn: true, uid: sess.uid, name: sess.name });
+});
+
+// Read-state (V3_BLUEPRINT §2): the server-owned four-state ledger that
+// replaced v2's client-side seen heuristics. Keys match the migration's
+// (canonical URL, else desk+title) so old and new state share one space.
+app.post("/api/read", async (c) => {
+  const sess = await sessionOf(c);
+  if (!sess) return c.json({ ok: false, error: "sign in required" }, 401);
+  const bodyText = await readBodyBounded(c.req.raw, 16 * 1024);
+  if (bodyText === null) return c.json({ ok: false, error: "payload too large" }, 413);
+  let p: { url?: string; desk?: string; title?: string; state?: string };
+  try {
+    p = JSON.parse(bodyText);
+  } catch {
+    return c.json({ ok: false, error: "invalid JSON" }, 400);
+  }
+  const state = String(p.state ?? "");
+  if (!["delivered", "seen", "read", "dismissed"].includes(state)) {
+    return c.json({ ok: false, error: "bad state" }, 400);
+  }
+  const desk = cleanDeskId(p.desk);
+  const title = String(p.title ?? "");
+  const key = urlKey({ url: p.url }) ?? (desk && title ? titleKey({ category: desk, title }) : null);
+  if (!key) return c.json({ ok: false, error: "no story key" }, 400);
+  await c.env.DB.prepare(
+    `INSERT INTO read_ledger (user_id, story_key, state, at) VALUES (?1, ?2, ?3, ?4)
+     ON CONFLICT(user_id, story_key) DO UPDATE SET state = excluded.state, at = excluded.at`,
+  ).bind(sess.uid, key, state, new Date().toISOString()).run();
+  return c.json({ ok: true, key, state });
+});
 
 // Restore-drill door (RUNBOOK §4): loads an NDJSON dump into a SCRATCH
 // ProfileDO. The drill: prefix is forced server-side so a drill can never
