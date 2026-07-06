@@ -9,10 +9,16 @@ export interface Env {
   NEWSROOM: DurableObjectNamespace;
   PROFILES: DurableObjectNamespace;
   CF_VERSION_METADATA?: { id: string; tag?: string };
+
+  // Secrets (dormant-until-secret, V3_BLUEPRINT §9):
+  INGEST_SECRET?: string; // arms POST /api/ingest
+  NTFY_TOPIC?: string; // arms Worker-originated phone alerts (RUNBOOK §2)
+
+  // Plain vars:
+  VALIDATE_LIVENESS?: string; // "off" skips network validation (tests/dev only)
 }
 
-// Keys the Worker requires at boot. Secrets join this list as features land
-// (dormant-until-secret integrations stay optional by design).
+// Keys the Worker requires at boot. Secrets stay optional by design.
 export const REQUIRED_BINDINGS = [
   "KV",
   "DB",

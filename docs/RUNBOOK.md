@@ -28,7 +28,7 @@ wrangler rollback --version-id <id> -y
 - `.github/workflows/watchdog.yml`, cron `7,37 * * * *` (offset — top-of-hour schedules get delayed). Probes `https://wire.databased.business/api/health`: asserts HTTP 200 and `newest_story_age_h < 10`. On failure: reopen `watchdog-down` issue + POST to ntfy.
 - Every **successful** run pings the healthchecks.io `gh-watchdog` check (period 30 min) — this catches GitHub's 60-day inactivity auto-disable of schedules. The watchdog is itself watched.
 - healthchecks.io (free tier, 20 checks): `ingest` (routine pings after each successful POST /api/ingest; period 8 h, grace 2 h), `signals-daily` ×2, `nightly-backup`, `gh-watchdog`.
-- `/api/health` contract (single JSON, 503 if any check red): `ok`; `kv`/`d1`/`r2` one-read checks (500 ms timeout); `last_ingest`; `newest_story_age_h`; per-cron heartbeats; `audio_spend_mtd_gbp` + `audio_cap_pct` (alert ≥80%); deployed `version`.
+- `/api/health` contract (single JSON, 503 if any check red): `ok`; `kv`/`d1`/`r2` one-read checks (500 ms timeout) plus `newsroom` (NewsroomDO stats, 1.5 s timeout — the single feed writer is a first-class store); `last_ingest`; `newest_story_age_h`; per-cron heartbeats; `audio_spend_mtd_gbp` + `audio_cap_pct` (alert ≥80%); deployed `version`.
 
 ## 4. Backups and restore
 

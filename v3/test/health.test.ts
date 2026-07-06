@@ -8,7 +8,7 @@ describe("GET /api/health", () => {
 
     const body = (await res.json()) as Record<string, unknown>;
     expect(body.ok).toBe(true);
-    expect(body.checks).toEqual({ kv: "ok", d1: "ok", r2: "ok" });
+    expect(body.checks).toEqual({ kv: "ok", d1: "ok", r2: "ok", newsroom: "ok" });
     // Contract keys exist even when features haven't landed (null, not absent).
     for (const key of [
       "version",

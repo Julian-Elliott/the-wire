@@ -5,6 +5,12 @@ export default defineConfig({
   plugins: [
     cloudflareTest({
       wrangler: { configPath: "./wrangler.toml" },
+      miniflare: {
+        bindings: {
+          INGEST_SECRET: "test-secret",
+          VALIDATE_LIVENESS: "off", // network validation is unit-tested with an injected fetcher
+        },
+      },
     }),
   ],
 });
