@@ -175,6 +175,61 @@ export class ProfileDO extends DurableObject<Env> {
     return { decision: "digest", reason: `held back — ${state}` };
   }
 
+  // One-off v2 import (V3_BLUEPRINT §11): seeds config (desks, notes,
+  // styles, window, show), the user's name (unrecoverable from Apple after
+  // first auth), and desk weights as decayable traits. Idempotent: re-runs
+  // overwrite config/name and re-seed traits only where evidence is absent
+  // (real signals must never be clobbered by a replayed migration).
+  async importV2(
+    payload: {
+      name?: string;
+      config?: Record<string, unknown>;
+      traits?: { key: string; value: number }[];
+    },
+    nowMs = Date.now(),
+  ): Promise<{ ok: true; traitsSeeded: number }> {
+    const nowIso = new Date(nowMs).toISOString();
+    const putMeta = (key: string, value: string) =>
+      this.ctx.storage.sql.exec(
+        "INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        key, value,
+      );
+    if (payload.name) putMeta("name", String(payload.name).slice(0, 80));
+    if (payload.config) putMeta("v2config", JSON.stringify(payload.config).slice(0, 8192));
+
+    let seeded = 0;
+    for (const t of payload.traits ?? []) {
+      const key = String(t.key ?? "").slice(0, 80);
+      const value = Number(t.value);
+      if (!key.startsWith("desk.weight.") || !Number.isFinite(value)) continue;
+      const res = this.ctx.storage.sql.exec(
+        `INSERT INTO traits (key, value, confidence, half_life_days, updated_at, evidence_count)
+         VALUES (?, ?, 0.25, 90, ?, 0)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+           WHERE traits.evidence_count = 0`,
+        key, Math.max(0, value), nowIso,
+      );
+      seeded += res.rowsWritten > 0 ? 1 : 0;
+    }
+    return { ok: true, traitsSeeded: seeded };
+  }
+
+  async getConfig(): Promise<{ name: string | null; config: Record<string, unknown> | null }> {
+    const meta = new Map(
+      this.ctx.storage.sql
+        .exec<{ key: string; value: string }>("SELECT key, value FROM meta WHERE key IN ('name','v2config')")
+        .toArray()
+        .map((r) => [r.key, r.value]),
+    );
+    let config: Record<string, unknown> | null = null;
+    try {
+      config = meta.has("v2config") ? JSON.parse(meta.get("v2config")!) : null;
+    } catch {
+      config = null;
+    }
+    return { name: meta.get("name") ?? null, config };
+  }
+
   async ping(): Promise<{ ok: true; signals: number; traits: number }> {
     const signals = this.ctx.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM signals").one().n;
     const traits = this.ctx.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM traits").one().n;

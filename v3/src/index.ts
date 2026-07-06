@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { REQUIRED_BINDINGS, type Env } from "./env";
-import { dedupeBatch, isStale, titleKey, urlKey, type BriefItem } from "./lib/dedup";
+import { dedupeBatch, isStale, titleKey, urlKey } from "./lib/dedup";
 import { SUMMARY_MAX, TITLE_STORE_MAX, URL_STORE_MAX, cleanDeskId } from "./lib/text";
 import { embedTexts, embeddingInput } from "./lib/embed";
 import { canonHost, canonUrl } from "./lib/urls";
@@ -218,13 +218,24 @@ async function storyId(key: string): Promise<string> {
   return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-app.post("/api/ingest", async (c) => {
+// Shared machine-door auth for ingest + admin import (same trust domain).
+async function machineGate(c: {
+  req: { header(name: string): string | undefined };
+  env: Env;
+  json: (obj: unknown, status: 401 | 503) => Response;
+}): Promise<Response | null> {
   if (!c.env.INGEST_SECRET) return c.json({ ok: false, error: "ingest dormant" }, 503);
   const auth = c.req.header("authorization") ?? "";
   const secret = auth.startsWith("Bearer ") ? auth.slice(7) : c.req.header("x-ingest-secret") ?? "";
   if (!(await safeEqual(secret, c.env.INGEST_SECRET))) {
     return c.json({ ok: false, error: "unauthorised" }, 401);
   }
+  return null;
+}
+
+app.post("/api/ingest", async (c) => {
+  const gate = await machineGate(c);
+  if (gate) return gate;
 
   const bodyText = await readBodyBounded(c.req.raw, MAX_BODY_BYTES);
   if (bodyText === null) return c.json({ ok: false, error: "payload too large" }, 413);
@@ -345,6 +356,97 @@ app.post("/api/ingest", async (c) => {
       clusterDup: clusterDups,
       outletCap: outletCapped,
     },
+  });
+});
+
+// ---- v2 migration (V3_BLUEPRINT §11) ---------------------------------------
+// One-off import door for scripts/migrate-v2.mjs: profile config + name into
+// the user's ProfileDO, v2 seen-records into the read_ledger as 'seen'.
+// Same machine secret as ingest; idempotent end to end.
+
+const UID_RE = /^(apple:[A-Za-z0-9._-]{1,80}|shared)$/;
+const MAX_SEEN_IMPORT = 600;
+
+app.post("/api/admin/import-profile", async (c) => {
+  const gate = await machineGate(c);
+  if (gate) return gate;
+  const bodyText = await readBodyBounded(c.req.raw, MAX_BODY_BYTES);
+  if (bodyText === null) return c.json({ ok: false, error: "payload too large" }, 413);
+  let p: {
+    uid?: string;
+    name?: string;
+    config?: Record<string, unknown>;
+    traits?: { key: string; value: number }[];
+    seen?: { c?: string; t?: string; u?: string; at?: number }[];
+  };
+  try {
+    p = JSON.parse(bodyText);
+  } catch {
+    return c.json({ ok: false, error: "invalid JSON" }, 400);
+  }
+  const uid = String(p.uid ?? "");
+  if (!UID_RE.test(uid)) return c.json({ ok: false, error: "bad uid" }, 400);
+
+  let traitsSeeded = 0;
+  if (uid !== "shared" && (p.name || p.config || p.traits?.length)) {
+    const stub = c.env.PROFILES.get(c.env.PROFILES.idFromName(uid)) as unknown as {
+      importV2(payload: {
+        name?: string;
+        config?: Record<string, unknown>;
+        traits?: { key: string; value: number }[];
+      }): Promise<{ ok: true; traitsSeeded: number }>;
+    };
+    traitsSeeded = (await stub.importV2({ name: p.name, config: p.config, traits: p.traits }))
+      .traitsSeeded;
+  }
+
+  let ledgerRows = 0;
+  const seen = Array.isArray(p.seen) ? p.seen.slice(0, MAX_SEEN_IMPORT) : [];
+  if (seen.length) {
+    const stmt = c.env.DB.prepare(
+      "INSERT OR IGNORE INTO read_ledger (user_id, story_key, state, at) VALUES (?1, ?2, 'seen', ?3)",
+    );
+    const batch = [];
+    for (const e of seen) {
+      const desk = cleanDeskId(e.c);
+      const title = String(e.t ?? "");
+      if (!desk || !title) continue;
+      const key =
+        urlKey({ url: e.u }) ?? titleKey({ category: desk, title });
+      const at = Number(e.at) > 0 ? new Date(Number(e.at) * 1000).toISOString() : new Date().toISOString();
+      batch.push(stmt.bind(uid, key, at));
+    }
+    if (batch.length) {
+      const results = await c.env.DB.batch(batch);
+      ledgerRows = results.reduce((n, r) => n + (r.meta.changes ?? 0), 0);
+    }
+  }
+
+  return c.json({ ok: true, uid, traitsSeeded, ledgerRows });
+});
+
+app.get("/api/admin/profile", async (c) => {
+  const gate = await machineGate(c);
+  if (gate) return gate;
+  const uid = String(c.req.query("uid") ?? "");
+  if (!UID_RE.test(uid)) return c.json({ ok: false, error: "bad uid" }, 400);
+  const ledger = await c.env.DB.prepare(
+    "SELECT COUNT(*) AS n FROM read_ledger WHERE user_id = ?1",
+  ).bind(uid).first<{ n: number }>();
+  if (uid === "shared") return c.json({ ok: true, uid, ledgerRows: ledger?.n ?? 0 });
+  const stub = c.env.PROFILES.get(c.env.PROFILES.idFromName(uid)) as unknown as {
+    getConfig(): Promise<{ name: string | null; config: Record<string, unknown> | null }>;
+    ping(): Promise<{ ok: true; signals: number; traits: number }>;
+  };
+  const [cfg, ping] = await Promise.all([stub.getConfig(), stub.ping()]);
+  return c.json({
+    ok: true,
+    uid,
+    name: cfg.name,
+    hasConfig: cfg.config !== null,
+    traits: ping.traits,
+    signals: ping.signals,
+    ledgerRows: ledger?.n ?? 0,
   });
 });
 
