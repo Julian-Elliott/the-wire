@@ -1,0 +1,55 @@
+# The Wire v3 ("wire-api") — blueprint: ../docs/V3_BLUEPRINT.md
+# Coexists with v2 (jacks-wire @ desk.databased.business) and shares nothing
+# at runtime. Secrets policy: ../docs/V3_BLUEPRINT.md §9 — committed [vars]
+# or `wrangler secret put`, nothing dashboard-set.
+
+name = "wire-api"
+main = "src/index.ts"
+compatibility_date = "2026-06-01"
+
+# Workers Logs (PLATFORM_LEVERAGE §2.5): free at our volume, 7-day retention.
+[observability]
+enabled = true
+head_sampling_rate = 1
+
+[[routes]]
+pattern = "wire.databased.business"
+custom_domain = true
+
+# Deployed-version id surfaced by /api/health (RUNBOOK §3).
+[version_metadata]
+binding = "CF_VERSION_METADATA"
+
+# Spend/metric counters (PLATFORM_LEVERAGE §2.5). 90-day retention — the
+# permanent record is a monthly counter row in D1.
+[[analytics_engine_datasets]]
+binding = "SPEND"
+dataset = "wire_spend"
+
+[[kv_namespaces]]
+binding = "KV"
+id = "93c06c0cdcd74956867358f89fd17ef8"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "wire"
+database_id = "6dc1fbc9-94ce-4f68-a496-33997c2e236d"
+
+# Private backups bucket (RUNBOOK §4): nightly D1/KV exports + DO NDJSON
+# sweeps land here. The 30-day lifecycle rule is set in the dashboard.
+[[r2_buckets]]
+binding = "BACKUPS"
+bucket_name = "wire-backups"
+
+[durable_objects]
+bindings = [
+  { name = "NEWSROOM", class_name = "NewsroomDO" },
+  { name = "PROFILES", class_name = "ProfileDO" },
+]
+
+# SQLite-backed from the first migration — irreversible, and required for
+# SQL + point-in-time recovery. Standing rule (RUNBOOK §1): migrations ship
+# as migration-only commits, deployed alone, additive schema only.
+[[migrations]]
+tag = "v3-1"
+new_sqlite_classes = ["NewsroomDO", "ProfileDO"]

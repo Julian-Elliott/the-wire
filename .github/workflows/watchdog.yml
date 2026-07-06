@@ -1,0 +1,55 @@
+# External watchdog (RUNBOOK §3): the Worker cannot watch itself.
+# Offset from the top of the hour — on-the-hour schedules get delayed.
+# Every SUCCESSFUL run pings healthchecks.io, which catches GitHub's
+# 60-day inactivity auto-disable of schedules (the watchdog is watched).
+name: Watchdog
+
+on:
+  schedule:
+    - cron: "7,37 * * * *"
+  workflow_dispatch:
+
+permissions:
+  issues: write
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Probe /api/health
+        id: probe
+        run: |
+          code=$(curl -s -m 20 -o health.json -w '%{http_code}' https://wire.databased.business/api/health || echo 000)
+          ok=$(jq -r '.ok // false' health.json 2>/dev/null || echo false)
+          age=$(jq -r '.newest_story_age_h // "null"' health.json 2>/dev/null || echo null)
+          fail=false
+          [ "$code" = "200" ] || fail=true
+          [ "$ok" = "true" ] || fail=true
+          if [ "$age" != "null" ] && [ "${age%.*}" -gt 10 ] 2>/dev/null; then fail=true; fi
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          echo "age=$age"   >> "$GITHUB_OUTPUT"
+          echo "fail=$fail" >> "$GITHUB_OUTPUT"
+
+      - name: Alert — ntfy + pinned issue
+        if: steps.probe.outputs.fail == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ -n "${{ secrets.NTFY_TOPIC }}" ]; then
+            curl -s -m 10 -H "Title: THE WIRE IS DOWN" -H "Priority: urgent" -H "Tags: rotating_light" \
+              -d "/api/health code=${{ steps.probe.outputs.code }} newest_story_age_h=${{ steps.probe.outputs.age }}" \
+              "https://ntfy.sh/${{ secrets.NTFY_TOPIC }}" || true
+          fi
+          open=$(gh issue list -R "$GITHUB_REPOSITORY" --state open --search "watchdog: wire.databased.business unhealthy in:title" --json number --jq length)
+          if [ "$open" = "0" ]; then
+            gh issue create -R "$GITHUB_REPOSITORY" \
+              --title "watchdog: wire.databased.business unhealthy" \
+              --body "@Julian-Elliott /api/health failed: HTTP ${{ steps.probe.outputs.code }}, newest_story_age_h=${{ steps.probe.outputs.age }}. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID — runbook: docs/RUNBOOK.md"
+          fi
+
+      - name: Dead-man ping (healthchecks.io)
+        if: steps.probe.outputs.fail != 'true'
+        run: |
+          if [ -n "${{ secrets.HC_GH_WATCHDOG_URL }}" ]; then
+            curl -fsS -m 10 --retry 3 "${{ secrets.HC_GH_WATCHDOG_URL }}" > /dev/null || true
+          fi

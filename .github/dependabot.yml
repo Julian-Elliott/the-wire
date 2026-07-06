@@ -1,0 +1,26 @@
+# Dependabot policy (PLATFORM_LEVERAGE §3.3): weekly npm, grouped dev
+# minor/patch; wrangler and runtime deps always get a manual glance.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+    groups:
+      dev-minor:
+        dependency-type: development
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: npm
+    directory: "/v3"
+    schedule:
+      interval: weekly
+    groups:
+      dev-minor:
+        dependency-type: development
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: monthly

@@ -191,7 +191,7 @@ Platform-leverage additions (docs/research/PLATFORM_LEVERAGE.md, July 2026): `NT
 
 **Runbook contingency:** if the Claude Code Routine (and its subscription billing) ever dies, the metered fallback is Sonnet doing L1 research at roughly **$1.30/day** — an acceptable degraded mode, documented so the 2 a.m. decision is pre-made.
 
-**Infra is flat $5/month (~£4)** — the existing Workers Paid plan covers every v3 primitive with all quotas under 20% utilised (verified July 2026, docs/research/PLATFORM_LEVERAGE.md); the do-nothing equivalents (hosted probes, transactional email, managed database, observability SaaS) would run £55–70/month. One plan constraint shapes operations: Cloudflare Notifications are **email-only** on this plan (webhooks need a Pro zone), so phone alerts route via the watchdog → ntfy path, never via Cloudflare webhooks.
+**Infra is flat $5/month (~£4)** — the existing Workers Paid plan covers every v3 primitive with all quotas under 20% utilised (verified July 2026, docs/research/PLATFORM_LEVERAGE.md); the do-nothing equivalents (hosted probes, transactional email, managed database, observability SaaS) would run £55–70/month. Cloudflare Notifications webhooks are plan-gated (Pro+ zone) — **verified available on this account** (dashboard check, July 2026), so the ~$8 budget tripwire also posts straight to ntfy; the watchdog → ntfy path remains the primary alerting spine either way.
 
 ## 11. Migration and coexistence
 

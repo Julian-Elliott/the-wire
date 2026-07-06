@@ -1,0 +1,112 @@
+# The Wire v3 (wire-api) — test → deploy → smoke → guarded rollback.
+# Pipeline spec: docs/research/PLATFORM_LEVERAGE.md §3.1; rollback rules: docs/RUNBOOK.md §1.
+name: Deploy v3 (wire-api)
+
+on:
+  push:
+    branches: [main]
+    paths: ["v3/**", ".github/workflows/deploy-v3.yml"]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-v3
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: v3
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: v3/package-lock.json
+      - run: npm ci
+      - run: npm run check
+      - run: npm test
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    environment: production
+    defaults:
+      run:
+        working-directory: v3
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: v3/package-lock.json
+      - run: npm ci
+
+      # DO migrations must ship alone and are never auto-rolled-back (RUNBOOK §1).
+      - name: Detect migration change
+        id: mig
+        working-directory: .
+        run: |
+          if git diff HEAD^ HEAD -- v3/wrangler.toml | grep -q 'migrations'; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Record previous version
+        id: prev
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          id=$(npx wrangler versions list --json 2>/dev/null | jq -r '.[0].id // empty' || echo "")
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: npx wrangler deploy
+
+      - name: Smoke test
+        id: smoke
+        run: |
+          for i in 1 2 3; do
+            code=$(curl -s -m 20 -o /tmp/health.json -w '%{http_code}' https://wire.databased.business/api/health || echo 000)
+            if [ "$code" = "200" ]; then
+              echo "healthy on attempt $i"
+              exit 0
+            fi
+            echo "attempt $i: HTTP $code"
+            sleep 10
+          done
+          # Worker-health fallback: same edge + SNI via desk's IPv4 records.
+          # Passing here with a warning means the WORKER is fine but public
+          # IPv4 DNS for wire.databased.business is broken — the watchdog
+          # owns that failure; rollback would not fix DNS.
+          code=$(curl -s -m 20 --connect-to wire.databased.business:443:desk.databased.business:443 \
+            -o /tmp/health.json -w '%{http_code}' https://wire.databased.business/api/health || echo 000)
+          if [ "$code" = "200" ]; then
+            echo "::warning::worker healthy via edge fallback, but public IPv4 DNS for wire.databased.business is not resolving — see watchdog issue"
+            exit 0
+          fi
+          cat /tmp/health.json 2>/dev/null || true
+          exit 1
+
+      - name: Rollback on smoke failure
+        if: failure() && steps.mig.outputs.changed == 'false' && steps.prev.outputs.id != ''
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: npx wrangler rollback "${{ steps.prev.outputs.id }}" --message "auto-rollback: smoke failure on ${{ github.sha }}" --yes || npx wrangler rollback "${{ steps.prev.outputs.id }}" --message "auto-rollback: smoke failure on ${{ github.sha }}"
+
+      - name: Alert on failure
+        if: failure()
+        run: |
+          if [ -n "${{ secrets.NTFY_TOPIC }}" ]; then
+            curl -s -m 10 -H "Title: wire-api deploy failed" -H "Priority: high" \
+              -d "sha=${{ github.sha }} migration=${{ steps.mig.outputs.changed }} — check Actions" \
+              "https://ntfy.sh/${{ secrets.NTFY_TOPIC }}" || true
+          fi

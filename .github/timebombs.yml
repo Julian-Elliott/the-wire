@@ -1,0 +1,19 @@
+# Calendar failure modes (RUNBOOK §7). Dates only — never secrets.
+# A weekly workflow files a GitHub issue 30 days before each date.
+# EDIT ME: entries marked "placeholder" need Julian's real dates.
+bombs:
+  - name: "Apple Developer Program renewal (£79/yr) — placeholder date, EDIT ME"
+    date: 2027-06-01
+    blast: "Sign in with Apple + APNs die for everyone"
+  - name: "Domain databased.business renewal — placeholder date, EDIT ME"
+    date: 2027-06-01
+    blast: "everything"
+  - name: "Cloudflare billing card expiry — placeholder date, EDIT ME"
+    date: 2027-06-01
+    blast: "Workers Paid lapses: crons throttle, Time Travel drops to 7 days"
+  - name: "Rotate scoped CLOUDFLARE_API_TOKEN (quarterly)"
+    date: 2026-10-06
+    blast: "deploys fail when stale"
+  - name: "Backup restore drill (quarterly) — scripts/restore-drill.sh"
+    date: 2026-10-06
+    blast: "untested backups are rumours"

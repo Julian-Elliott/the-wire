@@ -217,7 +217,7 @@ Total monthly cost: £0. One external service (healthchecks.io) earns its place 
 
 ### 4.2 Alert delivery to the phone
 
-- **Primary: ntfy.sh** — free hosted, iOS app, publishable by plain HTTP POST from Actions, from the Worker's own `catch` blocks, and from healthchecks.io's webhook integration. Topic name unguessable (`wire-alerts-<random>`) — it is the only auth. **Corrected by the verifier: Cloudflare Notifications cannot POST to ntfy on this plan** (webhooks need a Pro zone); the Worker-and-Actions paths above are the substitutes and cover everything.
+- **Primary: ntfy.sh** — free hosted, iOS app, publishable by plain HTTP POST from Actions, from the Worker's own `catch` blocks, and from healthchecks.io's webhook integration. Topic name unguessable (`wire-alerts-<random>`) — it is the only auth. **Corrected by the verifier: Cloudflare Notifications cannot POST to ntfy on this plan** (webhooks need a Pro zone); the Worker-and-Actions paths above are the substitutes and cover everything. *(Account-reality update, 5 Jul 2026: Julian's dashboard shows webhook destinations creatable — the account passes the Pro-zone gate after all, so the Notifications→ntfy wiring is added as a bonus channel for budget/incident alerts. The watchdog paths remain primary.)*
 - **Fallback: GitHub Mobile** — the watchdog's issue reopen + self-@mention produces a push through a different provider chain, surviving ntfy outages.
 - **Email** — Cloudflare's budget/incident notifications and healthchecks.io's built-in secondary; never primary (silent-failure magnet). **Pushover** (one-time $4.99) is the USE-LATER upgrade if hosted ntfy proves flaky.
 
