@@ -1005,8 +1005,10 @@ const BEATS = {
   outro: { key: "beats/outro_v1.mp3", music_length_ms: 3000, prompt: "warm resolving outro chord, gentle, fades out cleanly, no vocals" },
 };
 // Returns the beat's MP3 bytes (cached, or generated+cached on first use), or null
-// on any failure so a missing beat never blocks an episode. output_format is pinned
-// to mp3_44100_128 to MATCH the dialogue: the Music v2 default is 48kHz, which would
+// on any failure so a missing beat never blocks an episode. Beats stay at 128k
+// deliberately: they play as SEPARATE audio (never concatenated since 109acac),
+// are evergreen-cached, and re-rendering them buys nothing audible for stings.
+// output_format stays 44.1kHz: the Music v2 default is 48kHz, which would
 // play at the wrong pitch once byte-concatenated with the 44.1kHz dialogue.
 async function ensureBeat(env, kind) {
   if (audioPaused(env)) return null;
@@ -1068,7 +1070,7 @@ async function renderPodcast(env, turns) {
   // is preserved within each batch so the dialogue stays in sequence. A fixed seed
   // + stability keeps the multi-voice take controlled and reproducible.
   const renderChunk = async inputs => {
-    const res = await fetch("https://api.elevenlabs.io/v1/text-to-dialogue?output_format=mp3_44100_128", {
+    const res = await fetch("https://api.elevenlabs.io/v1/text-to-dialogue?output_format=mp3_44100_192", {
       method: "POST",
       headers: { "xi-api-key": env.ELEVENLABS_API_KEY, "content-type": "application/json" },
       // stability 0.35 (Creative side of Natural): livelier delivery, far more
@@ -1094,7 +1096,8 @@ async function renderPodcast(env, turns) {
 // Each rendered chunk declares ONLY ITS OWN length in that header, so players
 // read chunk one's header and believe the whole episode is that long (elapsed
 // overruns "total" while audio keeps playing). Without any Xing frame the
-// stream is plain CBR 128k and players time it correctly from byte length.
+// stream is plain CBR and players time it correctly from byte length
+// (bitrate-agnostic: the frame header is parsed, 128k and 192k both fine).
 function stripMp3Head(bytes) {
   let off = 0;
   if (bytes.length > 10 && bytes[0] === 0x49 && bytes[1] === 0x44 && bytes[2] === 0x33) {   // "ID3"
@@ -1130,7 +1133,7 @@ async function sha16(text) {
 // later get distinct keys, rather than colliding onto one cached MP3.
 // Bump POD_RENDER_VERSION whenever the rendering changes (e.g. adding beats) so
 // already-cached episodes re-render with the new audio instead of serving stale.
-const POD_RENDER_VERSION = "v6";   // v6: Xing/ID3 stripped per chunk (accurate duration); v5: exchange packing + stability 0.35
+const POD_RENDER_VERSION = "v7";   // v7: 192kbps output (ElevenLabs Pro); v6: Xing/ID3 stripped per chunk (accurate duration)
 async function podcastKey(turns, date) {
   const sig = await sha16(JSON.stringify(turns));
   return `podcast/${date || londonDate()}/${sig}-${POD_RENDER_VERSION}.mp3`;
@@ -1173,7 +1176,7 @@ async function ensurePodcastRendered(env, turns, date, key) {
 // Render one read-out to MP3 bytes via ElevenLabs Flash (cheap; cached so latency
 // only hits the first listener of each item).
 async function ttsRender(env, text, voiceId) {
-  const res = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?output_format=mp3_44100_128`, {
+  const res = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?output_format=mp3_44100_192`, {
     method: "POST",
     headers: { "xi-api-key": env.ELEVENLABS_API_KEY, "content-type": "application/json" },
     body: JSON.stringify({ model_id: "eleven_flash_v2_5", text }),
@@ -1612,7 +1615,7 @@ export default {
       const s = String(url.searchParams.get("s") || "");
       const sample = STYLE_PREVIEWS[s];
       if (!sample) return json({ error: "unknown style" }, 404);
-      const key = `previews/${s}-v1.mp3`;
+      const key = `previews/${s}-v2.mp3`;   // v2: 192kbps (ElevenLabs Pro)
       let hit = await env.WIRE_AUDIO.get(key);
       if (!hit) {
         try {
