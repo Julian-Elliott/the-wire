@@ -6,6 +6,9 @@
 name = "wire-api"
 main = "src/index.ts"
 compatibility_date = "2026-06-01"
+# workers.dev stays on as the CI smoke target: it bypasses zone-level bot
+# protection that 403s datacenter curl (see deploy-v3.yml smoke step).
+workers_dev = true
 
 # Workers Logs (PLATFORM_LEVERAGE §2.5): free at our volume, 7-day retention.
 [observability]

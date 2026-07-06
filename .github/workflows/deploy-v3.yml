@@ -71,28 +71,25 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: npx wrangler deploy
 
+      # Smoke target is workers.dev: zone-level bot protection 403s
+      # datacenter curl on the custom domain (runner-verified), so the
+      # custom domain is the WATCHDOG's concern, not the deploy gate's.
+      # workers.dev tests the deployed version end-to-end regardless.
       - name: Smoke test
         id: smoke
         run: |
           for i in 1 2 3; do
-            code=$(curl -s -m 20 -o /tmp/health.json -w '%{http_code}' https://wire.databased.business/api/health || echo 000)
+            code=$(curl -s -m 20 -o /tmp/health.json -w '%{http_code}' https://wire-api.mqwc67dqtw.workers.dev/api/health || echo 000)
             if [ "$code" = "200" ]; then
               echo "healthy on attempt $i"
+              # Informational: public custom-domain reachability (never fatal here).
+              pub=$(curl -s -m 15 -o /dev/null -w '%{http_code}' https://wire.databased.business/api/health || echo 000)
+              [ "$pub" = "200" ] || echo "::warning::wire.databased.business returned HTTP $pub from this runner (zone bot protection or DNS) — watchdog owns this"
               exit 0
             fi
             echo "attempt $i: HTTP $code"
             sleep 10
           done
-          # Worker-health fallback: same edge + SNI via desk's IPv4 records.
-          # Passing here with a warning means the WORKER is fine but public
-          # IPv4 DNS for wire.databased.business is broken — the watchdog
-          # owns that failure; rollback would not fix DNS.
-          code=$(curl -s -m 20 --connect-to wire.databased.business:443:desk.databased.business:443 \
-            -o /tmp/health.json -w '%{http_code}' https://wire.databased.business/api/health || echo 000)
-          if [ "$code" = "200" ]; then
-            echo "::warning::worker healthy via edge fallback, but public IPv4 DNS for wire.databased.business is not resolving — see watchdog issue"
-            exit 0
-          fi
           cat /tmp/health.json 2>/dev/null || true
           exit 1
 
@@ -101,8 +98,7 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: |
-          npx wrangler rollback "${{ steps.prev.outputs.id }}" --message "auto-rollback smoke failure on ${{ github.sha }}" --yes \
-            || npx wrangler rollback "${{ steps.prev.outputs.id }}" --message "auto-rollback smoke failure on ${{ github.sha }}"
+          npx wrangler rollback "${{ steps.prev.outputs.id }}" --message "auto-rollback smoke failure on ${{ github.sha }}"
 
       - name: Alert on failure
         if: failure()

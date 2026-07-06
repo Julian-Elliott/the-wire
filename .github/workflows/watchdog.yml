@@ -42,9 +42,13 @@ jobs:
           fi
           open=$(gh issue list -R "$GITHUB_REPOSITORY" --state open --search "watchdog: wire.databased.business unhealthy in:title" --json number --jq length)
           if [ "$open" = "0" ]; then
+            note=""
+            if [ "${{ steps.probe.outputs.code }}" = "403" ]; then
+              note=" NOTE: 403 from a datacenter IP usually means zone bot protection (Security → Bots) is challenging automated probes — real browsers may be fine, but the routine's ingest POSTs are at risk too. Fix the zone setting rather than the Worker."
+            fi
             gh issue create -R "$GITHUB_REPOSITORY" \
               --title "watchdog: wire.databased.business unhealthy" \
-              --body "@Julian-Elliott /api/health failed: HTTP ${{ steps.probe.outputs.code }}, newest_story_age_h=${{ steps.probe.outputs.age }}. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID — runbook: docs/RUNBOOK.md"
+              --body "@Julian-Elliott /api/health failed: HTTP ${{ steps.probe.outputs.code }}, newest_story_age_h=${{ steps.probe.outputs.age }}.$note Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID — runbook: docs/RUNBOOK.md"
           fi
 
       - name: Dead-man ping (healthchecks.io)
