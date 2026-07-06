@@ -508,9 +508,12 @@ const SESSION_DAYS = 90;
 
 async function sessionOf(c: { req: { raw: Request }; env: Env }): Promise<{ uid: string; name: string | null } | null> {
   const s = await verifyToken(c.env.SESSION_SECRET, getCookie(c.req.raw, "sess"));
-  return s && typeof s.uid === "string"
-    ? { uid: s.uid, name: typeof s.name === "string" ? s.name : null }
-    : null;
+  if (!s || typeof s.uid !== "string") return null;
+  // Apple S2S revocation denylist: a consent-revoked/account-deleted user's
+  // outstanding 90-day cookies die immediately (stateless sessions can't be
+  // recalled any other way).
+  if (await c.env.KV.get(`revoked:${s.uid}`)) return null;
+  return { uid: s.uid, name: typeof s.name === "string" ? s.name : null };
 }
 
 app.get("/auth/apple/login", async (c) => {
@@ -579,6 +582,46 @@ app.get("/auth/apple/logout", () => {
   const h = new Headers({ Location: "/" });
   h.append("Set-Cookie", "sess=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0");
   return new Response(null, { status: 302, headers: h });
+});
+
+// Apple server-to-server notifications (portal: "Server-to-Server
+// Notification Endpoint"). Apple POSTs {"payload": <RS256 JWT>} on account
+// lifecycle events. Signature verified against the same JWKS as sign-in;
+// consent-revoked / account-delete land the uid on the session denylist and
+// alarm the operator (account-delete purge is a runbook action).
+app.post("/auth/apple/events", async (c) => {
+  if (!appleEnabled(c.env)) return c.text("not configured", 404);
+  const bodyText = await readBodyBounded(c.req.raw, 32 * 1024);
+  if (bodyText === null) return c.json({ ok: false }, 413);
+  let jwt: unknown;
+  try {
+    jwt = (JSON.parse(bodyText) as { payload?: unknown }).payload;
+  } catch {
+    return c.json({ ok: false, error: "invalid JSON" }, 400);
+  }
+  const payload = (await verifyAppleIdToken(c.env, jwt, undefined)) as
+    | (Record<string, unknown> & { events?: string })
+    | null;
+  if (!payload) return c.json({ ok: false, error: "bad signature" }, 401);
+
+  let event: { type?: string; sub?: string } = {};
+  try {
+    event = typeof payload.events === "string" ? JSON.parse(payload.events) : (payload.events ?? {});
+  } catch { /* unknown event shape — acknowledged below */ }
+
+  const type = String(event.type ?? "unknown");
+  const sub = String(event.sub ?? "");
+  if (sub && (type === "consent-revoked" || type === "account-delete")) {
+    const uid = `apple:${sub}`;
+    await c.env.KV.put(`revoked:${uid}`, JSON.stringify({ type, at: new Date().toISOString() }));
+    alarm(
+      c.env,
+      c.executionCtx,
+      `Apple ${type}`,
+      `${uid} — sessions invalidated.${type === "account-delete" ? " RUNBOOK: purge ProfileDO + read_ledger rows." : ""}`,
+    );
+  }
+  return c.json({ ok: true, received: type });
 });
 
 app.get("/.well-known/apple-developer-domain-association.txt", (c) =>

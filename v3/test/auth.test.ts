@@ -64,6 +64,29 @@ describe("POST /auth/apple/callback", () => {
   });
 });
 
+describe("POST /auth/apple/events", () => {
+  it("rejects unsigned/garbage payloads", async () => {
+    const res = await SELF.fetch(`${BASE}/auth/apple/events`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ payload: "not.a.jwt" }),
+    });
+    expect(res.status).toBe(401);
+  });
+});
+
+describe("session revocation denylist", () => {
+  it("a denylisted uid's valid cookie stops working", async () => {
+    const cookie = await sessionCookie("apple:revoked-user");
+    expect((await SELF.fetch(`${BASE}/api/me`, { headers: { cookie } })).status).toBe(200);
+    await ((env as Record<string, any>).KV as KVNamespace).put(
+      "revoked:apple:revoked-user",
+      JSON.stringify({ type: "consent-revoked" }),
+    );
+    expect((await SELF.fetch(`${BASE}/api/me`, { headers: { cookie } })).status).toBe(401);
+  });
+});
+
 describe("GET /api/me", () => {
   it("401s anonymously; identifies a session", async () => {
     expect((await SELF.fetch(`${BASE}/api/me`)).status).toBe(401);

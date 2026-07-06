@@ -111,10 +111,12 @@ export interface AppleIdPayload {
   exp?: number;
 }
 
+// expectedNonce: REQUIRED for sign-in tokens (login flow always sets one);
+// pass undefined only for server-to-server event JWTs, which carry no nonce.
 export async function verifyAppleIdToken(
   env: AppleEnv,
   idToken: unknown,
-  expectedNonce: string,
+  expectedNonce: string | undefined,
 ): Promise<AppleIdPayload | null> {
   if (!idToken || typeof idToken !== "string") return null;
   const parts = idToken.split(".");
@@ -146,6 +148,6 @@ export async function verifyAppleIdToken(
   if (payload.iss !== "https://appleid.apple.com") return null;
   if (payload.aud !== env.APPLE_CLIENT_ID) return null;
   if (payload.exp && Date.now() / 1000 > payload.exp) return null;
-  if (payload.nonce !== expectedNonce) return null;
+  if (payload.nonce !== expectedNonce) return null; // both undefined for event JWTs
   return payload;
 }

@@ -2066,13 +2066,14 @@ Return ONLY JSON: {"segments":[{"type":"talk","text":"..."},{"type":"news","text
           target = { latest: userBriefKey(uid), snapshot: `${userBriefKey(uid)}:${londonDate()}`, desks: deskList(profile) };
         }
         const out = await ingestBriefing(env, body, target);
-        // Warm the podcast cache now (shared AND personalised feeds) so it's ready
-        // before anyone taps play. Render AWAITED here (not ctx.waitUntil, whose
-        // ~30s post-response budget would kill the ~40s render before it caches) —
-        // the routine POST can absorb the latency. This is the reliable render
-        // path; the cold GET below is only a fallback. Without the personalised
-        // prewarm, every signed-in reader's first play ate the full cold render.
-        if (Array.isArray(out.podcast) && out.podcast.length && env.ELEVENLABS_API_KEY && env.WIRE_AUDIO) {
+        // Podcast prewarm — OFF by default since 2026-07-07 (minimum-spend mode):
+        // episodes render LAZILY on first play instead (the cold GET fallback
+        // below, ~40s once per episode behind a lock), so editions nobody plays
+        // cost nothing. Set PODCAST_PREWARM = "on" to restore eager rendering
+        // (render AWAITED, not ctx.waitUntil — the routine POST absorbs the
+        // latency; waitUntil's ~30s budget would kill the ~40s render).
+        const prewarmOn = String(env.PODCAST_PREWARM || "off").toLowerCase() === "on";
+        if (prewarmOn && Array.isArray(out.podcast) && out.podcast.length && env.ELEVENLABS_API_KEY && env.WIRE_AUDIO) {
           try { await ensurePodcastRendered(env, out.podcast, out.date); } catch (_) {}
         }
         return json({ ok: true, date: out.date, slot: out.slot, accepted: out.items.length, target: uid ? `user:${uid}` : "shared", report: out.report });
