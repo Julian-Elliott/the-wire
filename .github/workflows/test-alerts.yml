@@ -1,0 +1,37 @@
+# One-off alert-pipe verification (RUNBOOK §2): manually dispatched, posts a
+# test push to the ntfy topic in secrets.NTFY_TOPIC. Tolerates the secret
+# being either a bare topic name (documented form) or a full https URL,
+# and reports which form it found.
+name: Test alerts
+
+on:
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send test push via ntfy
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+        run: |
+          if [ -z "$NTFY_TOPIC" ]; then
+            echo "::error::NTFY_TOPIC secret is not set"
+            exit 1
+          fi
+          case "$NTFY_TOPIC" in
+            http*) url="$NTFY_TOPIC"; echo "::warning::secret holds a full URL — the documented form is the bare topic name; watchdog/deploy alerts assume bare form" ;;
+            *)     url="https://ntfy.sh/$NTFY_TOPIC" ;;
+          esac
+          code=$(curl -s -m 15 -o /tmp/ntfy.json -w '%{http_code}' \
+            -H "Title: The Wire — alert pipe test" \
+            -H "Priority: high" \
+            -H "Tags: white_check_mark" \
+            -d "If you can read this on your phone, GitHub->ntfy alerting works. $(date -u +%FT%TZ)" \
+            "$url" || echo 000)
+          echo "ntfy responded HTTP $code"
+          if [ "$code" != "200" ]; then
+            cat /tmp/ntfy.json 2>/dev/null || true
+            echo "::error::ntfy publish failed (HTTP $code) — check the topic name in the NTFY_TOPIC secret"
+            exit 1
+          fi
