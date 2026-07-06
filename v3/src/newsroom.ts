@@ -8,6 +8,7 @@ import {
   type RecentStory,
 } from "./lib/cluster";
 import { CROSSDAY_TITLE_EXEMPT } from "./lib/dedup";
+import { gzip } from "./lib/gz";
 
 // NewsroomDO — the single writer for the feed (V3_BLUEPRINT §1/§2).
 // Owns stories, render cells and explicit build-status rows. Saga chaining
@@ -228,6 +229,26 @@ export class NewsroomDO extends DurableObject<Env> {
       )
       .one();
     return { stories: row.n, newestAddedAt: row.newest };
+  }
+
+  // Nightly NDJSON sweep (RUNBOOK §4): the newsroom dumps its own tables to
+  // the backups bucket — DO-SQLite has no platform export, and the R2 write
+  // happens HERE because a full stories dump can exceed RPC message limits.
+  async exportToR2(dateIso: string): Promise<{ key: string; rows: number }> {
+    const lines: string[] = [];
+    for (const table of ["stories", "cells", "build_status"] as const) {
+      for (const row of this.ctx.storage.sql.exec(`SELECT * FROM ${table}`).toArray()) {
+        if (table === "stories" && row.embedding != null) {
+          // BLOBs don't JSON-serialise; embeddings are regenerable, drop them.
+          row.embedding = null;
+        }
+        lines.push(JSON.stringify({ table, row }));
+      }
+    }
+    const key = `do/NewsroomDO/main/${dateIso}.ndjson.gz`;
+    await this.env.BACKUPS.put(key, await gzip(lines.join("\n")));
+    this.logStatus("backup", "ok", `${key} rows=${lines.length}`);
+    return { key, rows: lines.length };
   }
 
   logStatus(step: string, status: string, detail?: string): void {

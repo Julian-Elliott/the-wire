@@ -15,6 +15,11 @@ workers_dev = true
 enabled = true
 head_sampling_rate = 1
 
+# Nightly DO NDJSON sweep to wire-backups (RUNBOOK §4) — DO-SQLite has no
+# platform export, so this is load-bearing, not belt-and-braces.
+[triggers]
+crons = ["30 3 * * *"]
+
 [[routes]]
 pattern = "wire.databased.business"
 custom_domain = true

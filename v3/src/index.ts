@@ -35,8 +35,15 @@ const newsroom = (env: Env) => {
     recentKeys(days?: number): Promise<string[]>;
     feed(limit?: number): Promise<(Omit<StoredStory, "embedding"> & { saga_id: string | null })[]>;
     stats(): Promise<{ stories: number; newestAddedAt: string | null }>;
+    exportToR2(dateIso: string): Promise<{ key: string; rows: number }>;
   };
 };
+
+const profileStub = (env: Env, uid: string) =>
+  env.PROFILES.get(env.PROFILES.idFromName(uid)) as unknown as {
+    exportToR2(uid: string, dateIso: string): Promise<{ key: string; rows: number }>;
+    importNdjson(text: string): Promise<{ meta: number; traits: number; signals: number }>;
+  };
 
 // Worker-originated phone alert (RUNBOOK §2). Fire-and-forget, never throws.
 function alarm(
@@ -388,6 +395,12 @@ app.post("/api/admin/import-profile", async (c) => {
   if (!UID_RE.test(uid)) return c.json({ ok: false, error: "bad uid" }, 400);
 
   let traitsSeeded = 0;
+  if (uid !== "shared") {
+    // Registry for the nightly DO sweep (idFromName is one-way).
+    await c.env.DB.prepare("INSERT OR IGNORE INTO users (uid, created_at) VALUES (?1, ?2)")
+      .bind(uid, new Date().toISOString())
+      .run();
+  }
   if (uid !== "shared" && (p.name || p.config || p.traits?.length)) {
     const stub = c.env.PROFILES.get(c.env.PROFILES.idFromName(uid)) as unknown as {
       importV2(payload: {
@@ -481,6 +494,68 @@ app.get("/", (c) =>
   }),
 );
 
+// Restore-drill door (RUNBOOK §4): loads an NDJSON dump into a SCRATCH
+// ProfileDO. The drill: prefix is forced server-side so a drill can never
+// touch a real profile.
+app.post("/api/admin/restore-drill", async (c) => {
+  const gate = await machineGate(c);
+  if (gate) return gate;
+  const bodyText = await readBodyBounded(c.req.raw, 4 * 1024 * 1024);
+  if (bodyText === null) return c.json({ ok: false, error: "payload too large" }, 413);
+  let p: { target?: string; ndjson?: string };
+  try {
+    p = JSON.parse(bodyText);
+  } catch {
+    return c.json({ ok: false, error: "invalid JSON" }, 400);
+  }
+  const target = `drill:${String(p.target ?? "default").replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 60)}`;
+  if (typeof p.ndjson !== "string" || !p.ndjson.trim()) {
+    return c.json({ ok: false, error: "no ndjson" }, 400);
+  }
+  const counts = await profileStub(c.env, target).importNdjson(p.ndjson);
+  return c.json({ ok: true, target, counts });
+});
+
 app.notFound((c) => c.json({ ok: false, error: "not found" }, 404));
 
-export default app;
+// Nightly DO sweep (RUNBOOK §4): NewsroomDO dumps itself, then every known
+// ProfileDO via the users registry. Failures alarm — a backup that silently
+// stopped is worse than none.
+async function nightlySweep(env: Env, ctx: { waitUntil(p: Promise<unknown>): void }): Promise<void> {
+  const dateIso = new Date().toISOString().slice(0, 10);
+  const failures: string[] = [];
+  try {
+    await newsroom(env).exportToR2(dateIso);
+  } catch (e) {
+    failures.push(`newsroom: ${e instanceof Error ? e.message : "unknown"}`);
+  }
+  try {
+    const users = await env.DB.prepare("SELECT uid FROM users").all<{ uid: string }>();
+    for (const { uid } of users.results) {
+      try {
+        await profileStub(env, uid).exportToR2(uid, dateIso);
+      } catch (e) {
+        failures.push(`${uid}: ${e instanceof Error ? e.message : "unknown"}`);
+      }
+    }
+  } catch (e) {
+    failures.push(`users query: ${e instanceof Error ? e.message : "unknown"}`);
+  }
+
+  const heartbeats = JSON.parse((await env.KV.get("hb:crons")) ?? "{}");
+  heartbeats["do-sweep"] = new Date().toISOString();
+  if (failures.length) heartbeats["do-sweep-failures"] = failures.length;
+  else delete heartbeats["do-sweep-failures"];
+  await env.KV.put("hb:crons", JSON.stringify(heartbeats));
+
+  if (failures.length) {
+    alarm(env, ctx, "wire-api DO sweep failures", failures.join("\n").slice(0, 800));
+  }
+}
+
+export default {
+  fetch: app.fetch,
+  scheduled(controller: { cron: string }, env: Env, ctx: ExecutionContext) {
+    if (controller.cron === "30 3 * * *") ctx.waitUntil(nightlySweep(env, ctx));
+  },
+};

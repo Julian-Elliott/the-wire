@@ -1,6 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 import type { Env } from "./env";
 import { SIGNAL_STRENGTH, decayed } from "./lib/decay";
+import { gzip } from "./lib/gz";
 
 // ProfileDO ("Persona") — one per user, keyed idFromName(userId)
 // (V3_BLUEPRINT §4). Derivation is strictly one-directional:
@@ -228,6 +229,61 @@ export class ProfileDO extends DurableObject<Env> {
       config = null;
     }
     return { name: meta.get("name") ?? null, config };
+  }
+
+  // Nightly NDJSON sweep (RUNBOOK §4): DO-SQLite has no platform export, so
+  // the DO serialises its own tables to the backups bucket. One line per
+  // row: {"table": ..., "row": {...}}.
+  async exportToR2(uid: string, dateIso: string): Promise<{ key: string; rows: number }> {
+    const lines: string[] = [];
+    for (const table of ["meta", "traits", "signals"] as const) {
+      for (const row of this.ctx.storage.sql.exec(`SELECT * FROM ${table}`).toArray()) {
+        lines.push(JSON.stringify({ table, row }));
+      }
+    }
+    const safeUid = uid.replace(/[^A-Za-z0-9._:-]/g, "_");
+    const key = `do/ProfileDO/${safeUid}/${dateIso}.ndjson.gz`;
+    await this.env.BACKUPS.put(key, await gzip(lines.join("\n")));
+    return { key, rows: lines.length };
+  }
+
+  // Restore-drill counterpart (RUNBOOK §4): loads an NDJSON dump into THIS
+  // instance. Only ever called against scratch/staging DO names.
+  async importNdjson(text: string): Promise<{ meta: number; traits: number; signals: number }> {
+    const counts = { meta: 0, traits: 0, signals: 0 };
+    for (const line of text.split("\n")) {
+      if (!line.trim()) continue;
+      let parsed: { table: string; row: Record<string, unknown> };
+      try {
+        parsed = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      const r = parsed.row;
+      if (parsed.table === "meta") {
+        this.ctx.storage.sql.exec(
+          "INSERT OR IGNORE INTO meta (key, value) VALUES (?, ?)",
+          String(r.key), String(r.value),
+        );
+        counts.meta++;
+      } else if (parsed.table === "traits") {
+        this.ctx.storage.sql.exec(
+          `INSERT OR IGNORE INTO traits (key, value, confidence, half_life_days, updated_at, evidence_count)
+           VALUES (?,?,?,?,?,?)`,
+          String(r.key), Number(r.value), Number(r.confidence), Number(r.half_life_days),
+          String(r.updated_at), Number(r.evidence_count),
+        );
+        counts.traits++;
+      } else if (parsed.table === "signals") {
+        this.ctx.storage.sql.exec(
+          "INSERT INTO signals (ts, source_app, type, entity, value) VALUES (?,?,?,?,?)",
+          String(r.ts), String(r.source_app), String(r.type),
+          r.entity == null ? null : String(r.entity), r.value == null ? null : String(r.value),
+        );
+        counts.signals++;
+      }
+    }
+    return counts;
   }
 
   async ping(): Promise<{ ok: true; signals: number; traits: number }> {
