@@ -4,7 +4,9 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   plugins: [
     cloudflareTest({
-      wrangler: { configPath: "./wrangler.toml" },
+      // env.test = production bindings minus [ai] (remote-proxied, so it must
+      // never be reachable from tests — hermetic and CI-safe).
+      wrangler: { configPath: "./wrangler.toml", environment: "test" },
       miniflare: {
         bindings: {
           INGEST_SECRET: "test-secret",

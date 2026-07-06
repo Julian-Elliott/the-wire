@@ -1,5 +1,12 @@
 import { DurableObject } from "cloudflare:workers";
 import type { Env } from "./env";
+import {
+  CLUSTER_WINDOW_HOURS,
+  blobToVec,
+  clusterCandidate,
+  vecToBlob,
+  type RecentStory,
+} from "./lib/cluster";
 import { CROSSDAY_TITLE_EXEMPT } from "./lib/dedup";
 
 // NewsroomDO — the single writer for the feed (V3_BLUEPRINT §1/§2).
@@ -9,6 +16,7 @@ import { CROSSDAY_TITLE_EXEMPT } from "./lib/dedup";
 
 export interface StoredStory {
   story_id: string;
+  embedding?: Float32Array | null; // set by the route, stored as BLOB
   desk: string;
   title: string;
   summary: string;
@@ -96,27 +104,85 @@ export class NewsroomDO extends DurableObject<Env> {
       }
       ctx.storage.sql.exec(DDL);
       if (renamed) this.logStatus("schema", "renamed", `mismatched stories with data preserved as ${renamed}`);
+      // Additive migration (RUNBOOK §1): the embedding column arrived after
+      // the first deploy, so existing instances gain it via ALTER.
+      const cols2 = ctx.storage.sql
+        .exec<{ name: string }>("SELECT name FROM pragma_table_info('stories')")
+        .toArray()
+        .map((r) => r.name);
+      if (!cols2.includes("embedding")) {
+        ctx.storage.sql.exec("ALTER TABLE stories ADD COLUMN embedding BLOB");
+      }
     });
   }
 
   // Insert validated stories. PK = content-addressed dedup key, so replays
-  // and cross-batch repeats are idempotent (OR IGNORE).
-  async ingestBatch(rows: StoredStory[]): Promise<{ inserted: number }> {
+  // and cross-batch repeats are idempotent (OR IGNORE). Embedding-based
+  // clustering runs HERE — the single writer sees a consistent recent
+  // window (V3_BLUEPRINT §2): near-identical same-desk stories drop as
+  // duplicates; same-development stories chain into sagas.
+  async ingestBatch(
+    rows: StoredStory[],
+  ): Promise<{ inserted: number; clusterDups: number; sagaLinked: number }> {
+    const recent = this.recentWindow();
     let inserted = 0;
+    let clusterDups = 0;
+    let sagaLinked = 0;
+
     for (const r of rows) {
+      const vec = r.embedding ?? null;
+      const verdict = clusterCandidate({ desk: r.desk, title: r.title, vec }, recent);
+      if (verdict.kind === "duplicate") {
+        clusterDups++;
+        continue;
+      }
+      const sagaId = verdict.kind === "saga" ? verdict.sagaId : null;
+      if (sagaId) sagaLinked++;
+
       const res = this.ctx.storage.sql.exec(
         `INSERT OR IGNORE INTO stories
-           (story_id, desk, title, summary, why, url, canon_url, title_key, sources,
-            salience, priority, published_at, quote, editorial_read, added_at)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-        r.story_id, r.desk, r.title, r.summary, r.why, r.url, r.canon_url, r.title_key,
+           (story_id, saga_id, desk, title, summary, why, url, canon_url, title_key, sources,
+            salience, priority, published_at, quote, editorial_read, added_at, embedding)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        r.story_id, sagaId, r.desk, r.title, r.summary, r.why, r.url, r.canon_url, r.title_key,
         JSON.stringify(r.sources ?? []), r.salience, r.priority, r.published_at,
-        r.quote, r.editorial_read, r.added_at,
+        r.quote, r.editorial_read, r.added_at, vec ? vecToBlob(vec) : null,
       );
-      inserted += res.rowsWritten > 0 ? 1 : 0;
+      if (res.rowsWritten > 0) {
+        inserted++;
+        // Batch-internal chaining: later items in this batch must see this one.
+        recent.push({
+          story_id: r.story_id,
+          saga_id: sagaId,
+          desk: r.desk,
+          title: r.title,
+          vec,
+        });
+      }
     }
-    this.logStatus("ingest", "ok", `batch=${rows.length} inserted=${inserted}`);
-    return { inserted };
+    this.logStatus(
+      "ingest",
+      "ok",
+      `batch=${rows.length} inserted=${inserted} clusterDups=${clusterDups} sagas=${sagaLinked}`,
+    );
+    return { inserted, clusterDups, sagaLinked };
+  }
+
+  private recentWindow(): RecentStory[] {
+    const cutoff = new Date(Date.now() - CLUSTER_WINDOW_HOURS * 3_600_000).toISOString();
+    return this.ctx.storage.sql
+      .exec<{ story_id: string; saga_id: string | null; desk: string; title: string; embedding: ArrayBuffer | null }>(
+        "SELECT story_id, saga_id, desk, title, embedding FROM stories WHERE added_at >= ?",
+        cutoff,
+      )
+      .toArray()
+      .map((r) => ({
+        story_id: r.story_id,
+        saga_id: r.saga_id,
+        desk: r.desk,
+        title: r.title,
+        vec: blobToVec(r.embedding),
+      }));
   }
 
   // Cross-day dedup keys for the last `days` (V3_BLUEPRINT §2): canonical URL
@@ -137,15 +203,19 @@ export class NewsroomDO extends DurableObject<Env> {
     return keys;
   }
 
-  async feed(limit = 50): Promise<StoredStory[]> {
-    type Row = Omit<StoredStory, "sources"> & { sources: string; saga_id: string | null };
+  async feed(limit = 50): Promise<(Omit<StoredStory, "embedding"> & { saga_id: string | null })[]> {
+    type Row = Omit<StoredStory, "sources" | "embedding"> & {
+      sources: string;
+      saga_id: string | null;
+      embedding: ArrayBuffer | null;
+    };
     const rows = this.ctx.storage.sql
       .exec<Row>(
         "SELECT * FROM stories ORDER BY added_at DESC LIMIT ?",
         Math.min(Math.max(1, limit), 200),
       )
       .toArray();
-    return rows.map((r) => ({
+    return rows.map(({ embedding: _e, ...r }) => ({
       ...r,
       sources: JSON.parse(r.sources || "[]") as string[],
     }));

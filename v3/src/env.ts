@@ -9,6 +9,9 @@ export interface Env {
   NEWSROOM: DurableObjectNamespace;
   PROFILES: DurableObjectNamespace;
   CF_VERSION_METADATA?: { id: string; tag?: string };
+  // Workers AI (embeddings). Optional at runtime by design: absence or
+  // failure degrades clustering to exact-key dedup, never costs an edition.
+  AI?: { run(model: string, inputs: Record<string, unknown>): Promise<unknown> };
 
   // Secrets (dormant-until-secret, V3_BLUEPRINT §9):
   INGEST_SECRET?: string; // arms POST /api/ingest

@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { REQUIRED_BINDINGS, type Env } from "./env";
 import { dedupeBatch, isStale, titleKey, urlKey, type BriefItem } from "./lib/dedup";
 import { SUMMARY_MAX, TITLE_STORE_MAX, URL_STORE_MAX, cleanDeskId } from "./lib/text";
+import { embedTexts, embeddingInput } from "./lib/embed";
 import { canonHost, canonUrl } from "./lib/urls";
 import { validateBatch, type IngestItem } from "./lib/validate";
 import type { StoredStory } from "./newsroom";
@@ -28,9 +29,11 @@ app.use("*", async (c, next) => {
 const newsroom = (env: Env) => {
   const stub = env.NEWSROOM.get(env.NEWSROOM.idFromName("main"));
   return stub as unknown as {
-    ingestBatch(rows: StoredStory[]): Promise<{ inserted: number }>;
+    ingestBatch(
+      rows: StoredStory[],
+    ): Promise<{ inserted: number; clusterDups: number; sagaLinked: number }>;
     recentKeys(days?: number): Promise<string[]>;
-    feed(limit?: number): Promise<StoredStory[]>;
+    feed(limit?: number): Promise<(Omit<StoredStory, "embedding"> & { saga_id: string | null })[]>;
     stats(): Promise<{ stories: number; newestAddedAt: string | null }>;
   };
 };
@@ -276,15 +279,21 @@ app.post("/api/ingest", async (c) => {
     accepted.push(it);
   }
 
-  // 6. Persist (idempotent on the content-addressed key).
+  // 6. Embed (graceful absence: null vectors degrade clustering to
+  // exact-key dedup, never cost an edition) and persist idempotently.
+  const vectors = await embedTexts(
+    c.env.AI,
+    accepted.map((it) => embeddingInput(it.title, it.summary)),
+  );
   const nowIso = new Date().toISOString();
   const rows: StoredStory[] = await Promise.all(
-    accepted.map(async (it) => {
+    accepted.map(async (it, idx) => {
       const cu = canonUrl(it.url);
       const tk = titleKey({ category: it.category, title: it.title });
       const key = urlKey({ url: it.url }) ?? tk;
       return {
         story_id: await storyId(key),
+        embedding: vectors[idx],
         desk: it.category,
         title: it.title,
         summary: it.summary,
@@ -302,9 +311,9 @@ app.post("/api/ingest", async (c) => {
       };
     }),
   );
-  const { inserted } = rows.length
+  const { inserted, clusterDups, sagaLinked } = rows.length
     ? await newsroom(c.env).ingestBatch(rows)
-    : { inserted: 0 };
+    : { inserted: 0, clusterDups: 0, sagaLinked: 0 };
 
   // 7. Heartbeat + alarms. Rejects and overflow are loud, never silent.
   await c.env.KV.put("hb:ingest", nowIso);
@@ -325,6 +334,7 @@ app.post("/api/ingest", async (c) => {
     inserted,
     rejected: outcome.rejected.map((r) => ({ title: r.item.title, reason: r.reason })),
     demoted: outcome.demoted.length,
+    sagaLinked,
     quotesStripped: outcome.unverified.map((u) => ({ title: u.item.title, reason: u.reason })),
     dropped: {
       malformed,
@@ -332,6 +342,7 @@ app.post("/api/ingest", async (c) => {
       overflow,
       seen: dropped.filter((d) => d.reason === "seen-before").length,
       duplicate: dropped.filter((d) => d.reason !== "seen-before").length,
+      clusterDup: clusterDups,
       outletCap: outletCapped,
     },
   });
@@ -345,6 +356,7 @@ app.get("/api/feed/latest", async (c) => {
     count: items.length,
     items: items.map((s) => ({
       id: s.story_id,
+      saga: s.saga_id,
       desk: s.desk,
       title: s.title,
       summary: s.summary,
