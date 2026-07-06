@@ -691,12 +691,17 @@ app.notFound((c) => c.json({ ok: false, error: "not found" }, 404));
 
 // Nightly DO sweep (RUNBOOK §4): NewsroomDO dumps itself, then every known
 // ProfileDO via the users registry. Failures alarm — a backup that silently
-// stopped is worse than none.
-async function nightlySweep(env: Env, ctx: { waitUntil(p: Promise<unknown>): void }): Promise<void> {
+// stopped is worse than none. Also runnable on demand via /api/admin/sweep.
+async function nightlySweep(
+  env: Env,
+  ctx: { waitUntil(p: Promise<unknown>): void },
+): Promise<{ newsroom: { key: string; rows: number } | null; profiles: { key: string; rows: number }[]; failures: string[] }> {
   const dateIso = new Date().toISOString().slice(0, 10);
   const failures: string[] = [];
+  let newsroomOut: { key: string; rows: number } | null = null;
+  const profiles: { key: string; rows: number }[] = [];
   try {
-    await newsroom(env).exportToR2(dateIso);
+    newsroomOut = await newsroom(env).exportToR2(dateIso);
   } catch (e) {
     failures.push(`newsroom: ${e instanceof Error ? e.message : "unknown"}`);
   }
@@ -704,7 +709,7 @@ async function nightlySweep(env: Env, ctx: { waitUntil(p: Promise<unknown>): voi
     const users = await env.DB.prepare("SELECT uid FROM users").all<{ uid: string }>();
     for (const { uid } of users.results) {
       try {
-        await profileStub(env, uid).exportToR2(uid, dateIso);
+        profiles.push(await profileStub(env, uid).exportToR2(uid, dateIso));
       } catch (e) {
         failures.push(`${uid}: ${e instanceof Error ? e.message : "unknown"}`);
       }
@@ -722,7 +727,16 @@ async function nightlySweep(env: Env, ctx: { waitUntil(p: Promise<unknown>): voi
   if (failures.length) {
     alarm(env, ctx, "wire-api DO sweep failures", failures.join("\n").slice(0, 800));
   }
+  return { newsroom: newsroomOut, profiles, failures };
 }
+
+// Force-run the sweep (RUNBOOK §4: "back up now" before risky operations).
+app.post("/api/admin/sweep", async (c) => {
+  const gate = await machineGate(c);
+  if (gate) return gate;
+  const result = await nightlySweep(c.env, c.executionCtx);
+  return c.json({ ok: result.failures.length === 0, ...result });
+});
 
 export default {
   fetch: app.fetch,

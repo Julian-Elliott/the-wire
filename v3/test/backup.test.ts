@@ -72,6 +72,22 @@ describe("NewsroomDO NDJSON sweep", () => {
   });
 });
 
+describe("forced sweep door", () => {
+  it("runs the full sweep on demand and reports keys", async () => {
+    const res = await SELF.fetch("https://wire.databased.business/api/admin/sweep", {
+      method: "POST",
+      headers: { authorization: "Bearer test-secret" },
+    });
+    expect(res.status).toBe(200);
+    const b = (await res.json()) as Record<string, any>;
+    expect(b.ok).toBe(true);
+    expect(b.newsroom?.key).toContain("do/NewsroomDO/main/");
+    // Heartbeat lands so the backup workflow's freshness check passes.
+    const hb = JSON.parse((await (e.KV as KVNamespace).get("hb:crons")) ?? "{}");
+    expect(hb["do-sweep"]).toBeTruthy();
+  });
+});
+
 describe("restore-drill door", () => {
   it("imports only into drill-prefixed scratch DOs", async () => {
     const ndjson = JSON.stringify({
