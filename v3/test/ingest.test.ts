@@ -40,6 +40,15 @@ describe("POST /api/ingest", () => {
     expect((await post({ items: [mk("world")] }, "wrong")).status).toBe(401);
   });
 
+  it("accepts the v2 routine's x-ingest-key header style", async () => {
+    const res = await SELF.fetch(`${BASE}/api/ingest`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-ingest-key": "test-secret" },
+      body: JSON.stringify({ items: [mk("world")] }),
+    });
+    expect(res.status).toBe(200);
+  });
+
   it("rejects an empty payload", async () => {
     expect((await post({ items: [] })).status).toBe(400);
   });

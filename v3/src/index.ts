@@ -233,7 +233,9 @@ async function machineGate(c: {
 }): Promise<Response | null> {
   if (!c.env.INGEST_SECRET) return c.json({ ok: false, error: "ingest dormant" }, 503);
   const auth = c.req.header("authorization") ?? "";
-  const secret = auth.startsWith("Bearer ") ? auth.slice(7) : c.req.header("x-ingest-secret") ?? "";
+  const secret = auth.startsWith("Bearer ")
+    ? auth.slice(7)
+    : (c.req.header("x-ingest-secret") ?? c.req.header("x-ingest-key") ?? ""); // x-ingest-key = v2 routine compatibility
   if (!(await safeEqual(secret, c.env.INGEST_SECRET))) {
     return c.json({ ok: false, error: "unauthorised" }, 401);
   }
