@@ -10,6 +10,12 @@ compatibility_date = "2026-06-01"
 # protection that 403s datacenter curl (see deploy-v3.yml smoke step).
 workers_dev = true
 
+# Web reader (static assets served before the Worker for matching paths;
+# /api/* always reaches the Worker). NOT bound in [env.test] — tests hit the
+# Worker's JSON fallback for "/".
+[assets]
+directory = "./public"
+
 # Workers Logs (PLATFORM_LEVERAGE §2.5): free at our volume, 7-day retention.
 [observability]
 enabled = true

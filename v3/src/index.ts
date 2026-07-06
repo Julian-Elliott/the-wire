@@ -482,6 +482,7 @@ app.get("/api/feed/latest", async (c) => {
       sources: s.sources,
       salience: s.salience,
       priority: s.priority,
+      quote: s.quote,
       publishedAt: s.published_at,
       addedAt: s.added_at,
     })),
