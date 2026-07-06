@@ -100,7 +100,9 @@ jobs:
         if: failure() && steps.mig.outputs.changed == 'false' && steps.prev.outputs.id != ''
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-        run: npx wrangler rollback "${{ steps.prev.outputs.id }}" --message "auto-rollback: smoke failure on ${{ github.sha }}" --yes || npx wrangler rollback "${{ steps.prev.outputs.id }}" --message "auto-rollback: smoke failure on ${{ github.sha }}"
+        run: |
+          npx wrangler rollback "${{ steps.prev.outputs.id }}" --message "auto-rollback smoke failure on ${{ github.sha }}" --yes \
+            || npx wrangler rollback "${{ steps.prev.outputs.id }}" --message "auto-rollback smoke failure on ${{ github.sha }}"
 
       - name: Alert on failure
         if: failure()
