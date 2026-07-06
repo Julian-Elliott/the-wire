@@ -20,7 +20,7 @@ wrangler rollback --version-id <id> -y
 
 - **Primary:** ntfy.sh topic `$NTFY_TOPIC` (unguessable name is the only auth — treat as a secret). Publishers: the watchdog workflow, the Worker's own catch blocks, healthchecks.io webhooks.
 - **Fallback:** the watchdog reopens the pinned `watchdog-down` issue with a self-@mention → GitHub Mobile push (different provider chain; survives ntfy outages).
-- **Cloudflare Notifications → webhook (verified available on this account, 5 Jul 2026):** the account passes the Pro-zone gate — the dashboard's Create button works, so a webhook destination pointing at the ntfy topic carries the budget tripwire (~$8) and incident notices straight to the phone, with email as the second copy. Caveat: the docs gate webhooks behind "at least one Pro+ zone"; if the qualifying zone ever downgrades, these alerts silently fall back to email-only. The watchdog path is unaffected either way.
+- **Cloudflare Notifications: email-only on this plan (settled 6 Jul 2026).** The dashboard renders the webhook Create button, but the save/test fails — the Pro-zone entitlement is enforced at save-time, exactly as the docs gate says. Budget tripwire (~$8) and incident notices arrive **by email**; do not re-attempt the webhook unless a zone is upgraded to Pro+. The GitHub→ntfy pipe was verified working the same day (test-alerts workflow, HTTP 200), so everything urgent still reaches the phone via the watchdog and Worker paths.
 - Upgrade path if hosted ntfy proves flaky: Pushover (one-off ~$5).
 
 ## 3. Watchdog
