@@ -14,6 +14,10 @@ export interface Trigger {
   url: string; // link out to the source
   priority: 1 | 2 | 3;
   expiresHours: number;
+  // uid this trigger is FOR (per-user sources like PlanIt home areas).
+  // Absent = everyone. Audience-scoped triggers must salt dedupKey with the
+  // uid so two users near the same event each get their own story.
+  audience?: string;
 }
 
 export interface PollerResult {

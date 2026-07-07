@@ -157,6 +157,46 @@ export class ProfileDO extends DurableObject<Env> {
     );
   }
 
+  // Home area (V3_BLUEPRINT §7 per-user planning). The only coordinates the
+  // server ever holds are config the user explicitly supplied (§8 allows
+  // exactly that), rounded to 3 dp (~110 m) — enough for a PlanIt radius
+  // query, no more. Null clears.
+  async setHomeArea(
+    lat: number | null,
+    lon: number | null,
+  ): Promise<{ lat: number; lon: number } | null> {
+    if (lat == null || lon == null) {
+      this.ctx.storage.sql.exec("DELETE FROM meta WHERE key IN ('home_lat','home_lon')");
+      return null;
+    }
+    const rl = Math.round(Number(lat) * 1000) / 1000;
+    const rn = Math.round(Number(lon) * 1000) / 1000;
+    if (!Number.isFinite(rl) || !Number.isFinite(rn) || Math.abs(rl) > 90 || Math.abs(rn) > 180) {
+      throw new Error("invalid area");
+    }
+    this.ctx.storage.sql.exec(
+      "INSERT INTO meta (key, value) VALUES ('home_lat', ?), ('home_lon', ?) " +
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+      String(rl), String(rn),
+    );
+    return { lat: rl, lon: rn };
+  }
+
+  async getHomeArea(): Promise<{ lat: number; lon: number } | null> {
+    const meta = new Map(
+      this.ctx.storage.sql
+        .exec<{ key: string; value: string }>(
+          "SELECT key, value FROM meta WHERE key IN ('home_lat','home_lon')",
+        )
+        .toArray()
+        .map((r) => [r.key, r.value]),
+    );
+    if (!meta.has("home_lat") || !meta.has("home_lon")) return null;
+    const lat = Number(meta.get("home_lat"));
+    const lon = Number(meta.get("home_lon"));
+    return Number.isFinite(lat) && Number.isFinite(lon) ? { lat, lon } : null;
+  }
+
   // §5 trust ladder, server-side gate. Deliberately conservative: the
   // failure mode is a story arriving later in a digest, never a ping
   // during a funeral.

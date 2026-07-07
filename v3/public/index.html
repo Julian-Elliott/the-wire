@@ -83,12 +83,34 @@
       if (res.ok) {
         const me = await res.json();
         signedIn = true;
-        $("who").innerHTML = `${esc(me.name || "signed in")} · <a href="/auth/apple/logout" style="color:var(--dim)">sign out</a>`;
+        $("who").innerHTML = `${esc(me.name || "signed in")} · <a href="#" id="setarea" title="Set home area for local planning alerts" style="color:var(--dim);text-decoration:none">📍</a> · <a href="/auth/apple/logout" style="color:var(--dim)">sign out</a>`;
+        $("setarea").addEventListener("click", setHomeArea);
         loadDemotions();
       } else {
         $("who").innerHTML = '<a href="/auth/apple/login" style="color:var(--accent);text-decoration:none">Sign in with Apple</a>';
       }
     } catch { /* header stays quiet */ }
+  }
+
+  // Home area for "planning app near home" triggers (server rounds to
+  // ~110 m; §8 — the user supplies it explicitly, nothing is sensed).
+  function setHomeArea(e) {
+    e.preventDefault();
+    if (!navigator.geolocation) { $("stamp").textContent = "no location support in this browser"; return; }
+    $("stamp").textContent = "getting location…";
+    navigator.geolocation.getCurrentPosition(async (pos) => {
+      try {
+        const res = await fetch("/api/me/area", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ lat: pos.coords.latitude, lon: pos.coords.longitude }),
+        });
+        const data = await res.json();
+        $("stamp").textContent = data.ok
+          ? "home area set — local planning alerts on"
+          : "couldn't save home area";
+      } catch { $("stamp").textContent = "couldn't save home area"; }
+    }, () => { $("stamp").textContent = "location permission declined"; });
   }
 
   function markRead(item) {

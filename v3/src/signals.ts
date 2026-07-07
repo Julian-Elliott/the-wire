@@ -12,7 +12,7 @@
 import type { Env } from "./env";
 import { pollCarbon, pollOctopus } from "./lib/signals/energy";
 import { pollPlanit } from "./lib/signals/planit";
-import type { PollerResult, Trigger } from "./lib/signals/types";
+import type { Fetcher, PollerResult, Trigger } from "./lib/signals/types";
 import { pollWeather } from "./lib/signals/weather";
 
 // Operator/default area (Worcester) for shared sources until per-user areas
@@ -50,6 +50,7 @@ async function persistTriggers(env: Env, triggers: Trigger[]): Promise<number> {
       return {
         story_id,
         embedding: null,
+        audience: t.audience ?? null,
         desk: t.desk,
         title: t.title,
         summary: t.summary,
@@ -107,7 +108,12 @@ export async function routeInterrupts(
   let heldToDigest = 0;
   for (const t of p3) {
     const storyId = t.source === "test" ? null : await storyIdOf(t.dedupKey);
-    for (const { uid } of users.results) {
+    // An audience-scoped trigger is one user's business only — never fan
+    // it out to the whole user table.
+    const targets = t.audience
+      ? users.results.filter((u) => u.uid === t.audience)
+      : users.results;
+    for (const { uid } of targets) {
       const stub = env.PROFILES.get(env.PROFILES.idFromName(uid)) as unknown as {
         isInterruptible(priority: 1 | 2 | 3): Promise<{ decision: string; reason: string }>;
       };
@@ -147,6 +153,42 @@ export async function routeInterrupts(
   return { pushed, heldToDigest };
 }
 
+// Planning polls, one polite radius query per DISTINCT user home area
+// (V3_BLUEPRINT §7: "planning app 250 m from home" means THEIR home).
+// Users sharing a rounded area share one query; each user still gets their
+// own uid-salted, audience-scoped triggers so nothing leaks into the
+// global feed. Falls back to a single global operator-area poll only while
+// no user has set an area (the pre-per-user behaviour, unchanged).
+async function planningTasks(
+  env: Env,
+  fetcher: Fetcher,
+  fallback: { lat: number; lon: number },
+): Promise<Array<() => Promise<PollerResult>>> {
+  const users = await env.DB.prepare("SELECT uid FROM users").all<{ uid: string }>();
+  const byArea = new Map<string, { lat: number; lon: number; uids: string[] }>();
+  for (const { uid } of users.results.slice(0, 50)) {
+    const stub = env.PROFILES.get(env.PROFILES.idFromName(uid)) as unknown as {
+      getHomeArea(): Promise<{ lat: number; lon: number } | null>;
+    };
+    const area = await stub.getHomeArea().catch(() => null);
+    if (!area) continue;
+    const key = `${area.lat},${area.lon}`;
+    const cur = byArea.get(key) ?? { lat: area.lat, lon: area.lon, uids: [] };
+    cur.uids.push(uid);
+    byArea.set(key, cur);
+  }
+  if (!byArea.size) return [() => pollPlanit(fallback, fetcher)];
+  return [...byArea.values()].slice(0, 20).map((a) => async () => {
+    const res = await pollPlanit({ lat: a.lat, lon: a.lon }, fetcher);
+    return {
+      backend: res.backend,
+      triggers: a.uids.flatMap((uid) =>
+        res.triggers.map((t) => ({ ...t, audience: uid, dedupKey: `${uid}:${t.dedupKey}` })),
+      ),
+    };
+  });
+}
+
 export async function runSignals(
   env: Env,
   ctx: { waitUntil(p: Promise<unknown>): void },
@@ -156,12 +198,16 @@ export async function runSignals(
   const lat = Number(env.SIGNALS_LAT ?? DEFAULT_LAT);
   const lon = Number(env.SIGNALS_LON ?? DEFAULT_LON);
 
-  const settled = await Promise.allSettled<PollerResult>([
-    pollWeather({ lat, lon, place: "home", weatherkit: weatherkitCreds(env) }, fetcher),
-    pollOctopus(fetcher),
-    pollCarbon(fetcher),
-    pollPlanit({ lat, lon }, fetcher),
-  ]);
+  const tasks: Array<{ name: string; run: () => Promise<PollerResult> }> = [
+    { name: "weather", run: () => pollWeather({ lat, lon, place: "home", weatherkit: weatherkitCreds(env) }, fetcher) },
+    { name: "octopus", run: () => pollOctopus(fetcher) },
+    { name: "carbon", run: () => pollCarbon(fetcher) },
+    ...(await planningTasks(env, fetcher, { lat, lon })).map((run, i) => ({
+      name: i === 0 ? "planit" : `planit:${i + 1}`,
+      run,
+    })),
+  ];
+  const settled = await Promise.allSettled<PollerResult>(tasks.map((t) => t.run()));
 
   const triggers: Trigger[] = [];
   // A one-off synthetic priority-3 to prove the gate→push chain end to end
@@ -179,13 +225,12 @@ export async function runSignals(
     : [];
   const backends: Record<string, string> = {};
   const failures: string[] = [];
-  const names = ["weather", "octopus", "carbon", "planit"];
   settled.forEach((s, i) => {
     if (s.status === "fulfilled") {
-      backends[names[i]] = s.value.backend;
+      backends[tasks[i].name] = s.value.backend;
       triggers.push(...s.value.triggers);
     } else {
-      failures.push(`${names[i]}: ${String(s.reason).slice(0, 80)}`);
+      failures.push(`${tasks[i].name}: ${String(s.reason).slice(0, 80)}`);
     }
   });
 

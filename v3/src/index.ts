@@ -40,7 +40,7 @@ const newsroom = (env: Env) => {
       rows: StoredStory[],
     ): Promise<{ inserted: number; clusterDups: number; sagaLinked: number }>;
     recentKeys(days?: number): Promise<string[]>;
-    feed(limit?: number): Promise<(Omit<StoredStory, "embedding"> & { saga_id: string | null })[]>;
+    feed(limit?: number, uid?: string | null): Promise<(Omit<StoredStory, "embedding"> & { saga_id: string | null })[]>;
     stats(): Promise<{ stories: number; newestAddedAt: string | null }>;
     exportToR2(dateIso: string): Promise<{ key: string; rows: number }>;
   };
@@ -490,7 +490,10 @@ app.get("/api/admin/profile", async (c) => {
 
 app.get("/api/feed/latest", async (c) => {
   const limit = Number(c.req.query("limit") ?? 50);
-  const items = await newsroom(c.env).feed(Number.isFinite(limit) ? limit : 50);
+  // Anonymous callers get global stories only; a session additionally
+  // unlocks stories scoped to that user (per-user triggers, §7).
+  const sess = await sessionOf(c);
+  const items = await newsroom(c.env).feed(Number.isFinite(limit) ? limit : 50, sess?.uid ?? null);
   return c.json({
     ok: true,
     count: items.length,
@@ -720,6 +723,45 @@ app.get("/api/me/demotions", async (c) => {
     "SELECT story_id, decision, reason, at FROM demotion_ledger WHERE user_id = ?1 ORDER BY at DESC LIMIT 100",
   ).bind(sess.uid).all<{ story_id: string; decision: string; reason: string; at: string }>();
   return c.json({ ok: true, demotions: rows.results });
+});
+
+// Home area for per-user planning triggers (§7). The user supplies it
+// explicitly (§8: config the user supplied is the one coordinate exception);
+// the DO rounds to 3 dp (~110 m) before storing. POST {lat, lon} sets;
+// POST {lat: null} clears.
+app.get("/api/me/area", async (c) => {
+  const sess = await sessionOf(c);
+  if (!sess) return c.json({ ok: false, error: "sign in required" }, 401);
+  const stub = profileStub(c.env, sess.uid) as unknown as {
+    getHomeArea(): Promise<{ lat: number; lon: number } | null>;
+  };
+  return c.json({ ok: true, area: await stub.getHomeArea() });
+});
+
+app.post("/api/me/area", async (c) => {
+  const sess = await sessionOf(c);
+  if (!sess) return c.json({ ok: false, error: "sign in required" }, 401);
+  const bodyText = await readBodyBounded(c.req.raw, 1024);
+  if (bodyText === null) return c.json({ ok: false, error: "payload too large" }, 413);
+  let p: { lat?: number | null; lon?: number | null };
+  try {
+    p = JSON.parse(bodyText);
+  } catch {
+    return c.json({ ok: false, error: "invalid JSON" }, 400);
+  }
+  const stub = profileStub(c.env, sess.uid) as unknown as {
+    setHomeArea(lat: number | null, lon: number | null): Promise<{ lat: number; lon: number } | null>;
+  };
+  if (p.lat == null || p.lon == null) {
+    await stub.setHomeArea(null, null);
+    return c.json({ ok: true, area: null });
+  }
+  const lat = Number(p.lat);
+  const lon = Number(p.lon);
+  if (!Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) {
+    return c.json({ ok: false, error: "invalid coordinates" }, 400);
+  }
+  return c.json({ ok: true, area: await stub.setHomeArea(lat, lon) });
 });
 
 // ---- Persona tool surface (V3_BLUEPRINT §4) --------------------------------
