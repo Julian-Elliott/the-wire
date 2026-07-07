@@ -21,10 +21,10 @@ directory = "./public"
 enabled = true
 head_sampling_rate = 1
 
-# Nightly DO NDJSON sweep to wire-backups (RUNBOOK §4) — DO-SQLite has no
-# platform export, so this is load-bearing, not belt-and-braces.
+# Crons: nightly DO sweep (03:30, RUNBOOK §4) + signals polling (every 30 min,
+# V3_BLUEPRINT §7). The scheduled handler routes by controller.cron.
 [triggers]
-crons = ["30 3 * * *"]
+crons = ["30 3 * * *", "*/30 * * * *"]
 
 [[routes]]
 pattern = "wire.databased.business"

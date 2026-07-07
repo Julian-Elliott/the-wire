@@ -6,6 +6,7 @@ import {
 import {
   PERSONA_TOOLS, verifyPersonaToken, type PersonaClaims,
 } from "./lib/persona-token";
+import { runSignals } from "./signals";
 import { dedupeBatch, isStale, titleKey, urlKey } from "./lib/dedup";
 import { SUMMARY_MAX, TITLE_STORE_MAX, URL_STORE_MAX, cleanDeskId } from "./lib/text";
 import { embedTexts, embeddingInput } from "./lib/embed";
@@ -934,12 +935,46 @@ app.post("/api/admin/sweep", async (c) => {
   return c.json({ ok: result.failures.length === 0, ...result });
 });
 
+// Force-run the signals poll on demand (V3_BLUEPRINT §7) — verification and
+// the interrupt-tier proof without waiting for the 30-minute cron.
+app.post("/api/admin/signals", async (c) => {
+  const gate = await machineGate(c);
+  if (gate) return gate;
+  const testInterrupt = c.req.query("test") === "interrupt";
+  const result = await runSignals(c.env, c.executionCtx, { testInterrupt });
+  return c.json({ ok: true, ...result });
+});
+
+// Report a coarse device state onto a profile (V3_BLUEPRINT §5). The iOS app
+// owns this; exposed here (machine-gated) so the interrupt tier is testable
+// and the trust ladder has fresh state to reason over.
+app.post("/api/admin/coarse-state", async (c) => {
+  const gate = await machineGate(c);
+  if (gate) return gate;
+  const bodyText = await readBodyBounded(c.req.raw, 4 * 1024);
+  if (bodyText === null) return c.json({ ok: false }, 413);
+  let p: { uid?: string; state?: string; place?: string };
+  try {
+    p = JSON.parse(bodyText);
+  } catch {
+    return c.json({ ok: false, error: "invalid JSON" }, 400);
+  }
+  const uid = String(p.uid ?? "");
+  if (!/^apple:[A-Za-z0-9._-]{1,80}$/.test(uid)) return c.json({ ok: false, error: "bad uid" }, 400);
+  const valid = ["focus", "meeting", "commuting", "workout", "asleep", "open"];
+  if (!valid.includes(String(p.state))) return c.json({ ok: false, error: "bad state" }, 400);
+  const stub = c.env.PROFILES.get(c.env.PROFILES.idFromName(uid)) as unknown as {
+    reportState(state: string, place?: string): Promise<void>;
+  };
+  await stub.reportState(String(p.state), p.place ? String(p.place) : undefined);
+  return c.json({ ok: true, uid, state: p.state });
+});
+
 export default {
   fetch: app.fetch,
-  // Single cron (wrangler.toml [triggers]); run the sweep on any scheduled
-  // invocation rather than matching a duplicated literal (review fix — the
-  // string is defined once, in wrangler.toml).
-  scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext) {
-    ctx.waitUntil(nightlySweep(env, ctx));
+  scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext) {
+    // Two crons: the daily 03:30 sweep vs the 30-minute signals poll.
+    if (controller.cron === "30 3 * * *") ctx.waitUntil(nightlySweep(env, ctx));
+    else ctx.waitUntil(runSignals(env, ctx).then(() => {}));
   },
 };

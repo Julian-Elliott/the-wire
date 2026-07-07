@@ -24,6 +24,12 @@ export interface Env {
   VALIDATE_LIVENESS?: string; // "off" skips network validation (tests/dev only)
   APPLE_CLIENT_ID?: string; // Services ID (aud) — public-safe, committed
   APPLE_REDIRECT_URI?: string;
+  APPLE_TEAM_ID?: string; // shared by WeatherKit (and future MusicKit)
+  WEATHERKIT_KEY_ID?: string;
+  WEATHERKIT_APP_ID?: string;
+  WEATHERKIT_PRIVATE_KEY?: string; // secret (.p8) — WeatherKit dormant without it
+  SIGNALS_LAT?: string; // operator area for shared weather/energy sources
+  SIGNALS_LON?: string;
 }
 
 // Keys the Worker requires at boot. Secrets stay optional by design.
