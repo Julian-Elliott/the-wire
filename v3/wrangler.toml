@@ -57,7 +57,7 @@ APPLE_REDIRECT_URI = "https://wire.databased.business/auth/apple/callback"
 # the secret WEATHERKIT_PRIVATE_KEY. Dormant until the poller lands.
 APPLE_TEAM_ID = "7BL94Z94QH"
 WEATHERKIT_KEY_ID = "6W7Q97JL6K"
-WEATHERKIT_APP_ID = "business.databased.wire"
+WEATHERKIT_APP_ID = "business.databased.thewire"
 
 [[kv_namespaces]]
 binding = "KV"

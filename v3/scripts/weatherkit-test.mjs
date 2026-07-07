@@ -15,7 +15,7 @@ import { fileURLToPath } from "node:url";
 
 const TEAM = "7BL94Z94QH";
 const KEY_ID = "6W7Q97JL6K";
-const APP_ID = "business.databased.wire";
+const APP_ID = "business.databased.thewire";
 const [lat = "52.192", lon = "-2.22"] = process.argv.slice(2); // Worcester
 
 const here = dirname(fileURLToPath(import.meta.url));
