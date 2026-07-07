@@ -42,6 +42,7 @@
   h2 a:hover { text-decoration: underline; text-decoration-color: var(--accent); }
   p.summary { margin: 0 0 6px; color: #c9c6bf; }
   p.why { margin: 0; color: var(--dim); font-size: 14px; font-style: italic; }
+  p.held { margin: 6px 0 0; color: var(--accent); font-size: 13px; font-style: italic; }
   blockquote { margin: 8px 0 0; padding-left: 10px; border-left: 2px solid var(--line); color: var(--dim); font-size: 14px; }
   #empty { text-align: center; color: var(--dim); padding: 70px 20px; }
   #empty .big { font-size: 20px; color: var(--ink); margin-bottom: 8px; }
@@ -64,6 +65,17 @@
   let items = [];
   let deskFilter = null;
   let signedIn = false;
+  let held = {}; // story_id -> "why demoted" note (trust UX, §5)
+
+  async function loadDemotions() {
+    try {
+      const res = await fetch("/api/me/demotions");
+      if (!res.ok) return;
+      const data = await res.json();
+      held = Object.fromEntries((data.demotions || []).map((d) => [d.story_id, d.reason]));
+      renderFeed();
+    } catch { /* notes are best-effort */ }
+  }
 
   async function whoami() {
     try {
@@ -72,6 +84,7 @@
         const me = await res.json();
         signedIn = true;
         $("who").innerHTML = `${esc(me.name || "signed in")} · <a href="/auth/apple/logout" style="color:var(--dim)">sign out</a>`;
+        loadDemotions();
       } else {
         $("who").innerHTML = '<a href="/auth/apple/login" style="color:var(--accent);text-decoration:none">Sign in with Apple</a>';
       }
@@ -128,6 +141,7 @@
         <h2><a href="${esc(safeUrl(i.url))}" target="_blank" rel="noopener noreferrer">${esc(i.title)}</a></h2>
         <p class="summary">${esc(i.summary)}</p>
         ${i.why ? `<p class="why">${esc(i.why)}</p>` : ""}
+        ${held[i.id] ? `<p class="held">held back — ${esc(held[i.id])}</p>` : ""}
         ${i.quote ? `<blockquote>“${esc(i.quote)}”</blockquote>` : ""}
       </article>`).join("");
   }
