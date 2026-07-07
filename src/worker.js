@@ -1862,9 +1862,12 @@ ${items.join("\n")}
         if (t.key === "shared") { feed = await readJSON(env, SHARED_KEY); }
         else if (!hasNews(feed) || feed.date !== londonDate()) {
           const shared = await readJSON(env, SHARED_KEY);
-          // Any stories beat none; a personal feed that HAS stories only yields
-          // to a strictly fresher shared one (ISO dates compare lexicographically).
-          if (hasNews(shared) && (!hasNews(feed) || String(shared.date || "") > String(feed.date || ""))) { feed = shared; source = "shared"; }
+          // A storyless personal copy yields to a shared wire that's no older
+          // (stories beat none, but never older ones than the app is showing);
+          // one that HAS stories yields only to a strictly fresher shared wire.
+          // ISO dates compare lexicographically; a missing key compares as "".
+          const sd = String((shared && shared.date) || ""), pd = String((feed && feed.date) || "");
+          if (hasNews(shared) && (hasNews(feed) ? sd > pd : sd >= pd)) { feed = shared; source = "shared"; }
         }
         const labelOf = id => { const d = ((feed && feed.desks) || []).find(x => x.id === id); return (d && d.label) || id; };
         // Sweep the reader's DESKS — one top story per desk (salience-first),
