@@ -43,7 +43,12 @@ jobs:
           python3 - "$NS" <<'EOF'
           import json, subprocess, sys
           ns = sys.argv[1]
-          keys = [k["name"] for k in json.load(open("/tmp/keys.json"))][:500]
+          allkeys = [k["name"] for k in json.load(open("/tmp/keys.json"))]
+          CAP = 5000  # v2's live namespace is ~21 keys; this cap is a runaway guard
+          if len(allkeys) > CAP:
+              print(f"::error::KV export truncated: {len(allkeys)} keys exceeds cap {CAP}")
+              sys.exit(1)
+          keys = allkeys
           out = {}
           for k in keys:
               try:
@@ -60,7 +65,9 @@ jobs:
 
       - name: Verify the Worker's DO sweep ran (last 26h)
         run: |
-          swept=$(curl -s -m 20 https://wire.databased.business/api/health | jq -r '.crons["do-sweep"] // empty')
+          # workers.dev, not the custom domain: datacenter curl to the custom
+          # domain 403s on zone bot-scoring (same as the deploy smoke step).
+          swept=$(curl -s -m 20 https://wire-api.mqwc67dqtw.workers.dev/api/health | jq -r '.crons["do-sweep"] // empty')
           if [ -z "$swept" ]; then
             echo "::error::DO sweep heartbeat missing — ProfileDO/NewsroomDO dumps may not exist"
             exit 1

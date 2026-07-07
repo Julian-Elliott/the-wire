@@ -50,29 +50,37 @@ export interface ClusterVerdict {
   matchId?: string;
 }
 
-// Compare a candidate against the recent window (newest-first is fine; the
-// BEST match decides). Brute-force cosine: at ~40 stories/day this is
-// microseconds — Vectorize stays a later swap (V3_BLUEPRINT §1).
+// Compare a candidate against the recent window. Review fix: evaluate the
+// gates (entity-proxy, desk, thresholds) on EVERY qualifying story, not just
+// the single argmax — otherwise a high-cosine-but-non-qualifying story
+// shadows a genuine duplicate or saga sibling scoring just below it. A true
+// same-desk duplicate wins over a saga link; among ties, higher cosine wins.
+// Brute-force at ~40 stories/day is microseconds (Vectorize stays a later swap).
 export function clusterCandidate(
   candidate: { desk: string; title: string; vec: Float32Array | null },
   recent: RecentStory[],
 ): ClusterVerdict {
   if (!candidate.vec) return { kind: "new", sagaId: null };
-  let best: { score: number; story: RecentStory } | null = null;
+  let bestDup: { score: number; story: RecentStory } | null = null;
+  let bestSaga: { score: number; story: RecentStory } | null = null;
   for (const r of recent) {
     if (!r.vec) continue;
     const score = cosine(candidate.vec, r.vec);
-    if (!best || score > best.score) best = { score, story: r };
+    if (score < SAGA_COSINE) continue;
+    if (!sharesEntityProxy(candidate.title, r.title)) continue;
+    if (score >= DUP_COSINE && r.desk === candidate.desk) {
+      if (!bestDup || score > bestDup.score) bestDup = { score, story: r };
+    } else if (!bestSaga || score > bestSaga.score) {
+      bestSaga = { score, story: r };
+    }
   }
-  if (!best) return { kind: "new", sagaId: null };
-
-  const { score, story } = best;
-  if (!sharesEntityProxy(candidate.title, story.title)) return { kind: "new", sagaId: null };
-  if (score >= DUP_COSINE && story.desk === candidate.desk) {
-    return { kind: "duplicate", sagaId: story.saga_id ?? story.story_id, matchId: story.story_id };
+  if (bestDup) {
+    const s = bestDup.story;
+    return { kind: "duplicate", sagaId: s.saga_id ?? s.story_id, matchId: s.story_id };
   }
-  if (score >= SAGA_COSINE) {
-    return { kind: "saga", sagaId: story.saga_id ?? story.story_id, matchId: story.story_id };
+  if (bestSaga) {
+    const s = bestSaga.story;
+    return { kind: "saga", sagaId: s.saga_id ?? s.story_id, matchId: s.story_id };
   }
   return { kind: "new", sagaId: null };
 }

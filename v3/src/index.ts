@@ -3,6 +3,9 @@ import { REQUIRED_BINDINGS, type Env } from "./env";
 import {
   appleEnabled, getCookie, randHex, signToken, verifyAppleIdToken, verifyToken,
 } from "./lib/auth";
+import {
+  PERSONA_TOOLS, verifyPersonaToken, type PersonaClaims,
+} from "./lib/persona-token";
 import { dedupeBatch, isStale, titleKey, urlKey } from "./lib/dedup";
 import { SUMMARY_MAX, TITLE_STORE_MAX, URL_STORE_MAX, cleanDeskId } from "./lib/text";
 import { embedTexts, embeddingInput } from "./lib/embed";
@@ -42,10 +45,26 @@ const newsroom = (env: Env) => {
   };
 };
 
+interface PersonaVerdict {
+  decision: "interrupt" | "digest" | "silent";
+  reason: string;
+}
+interface PersonaContext {
+  name: string | null;
+  state: { value: string; ageMinutes: number } | null;
+  place: string | null;
+  dials: Record<string, number>;
+  topDesks: { desk: string; weight: number }[];
+}
 const profileStub = (env: Env, uid: string) =>
   env.PROFILES.get(env.PROFILES.idFromName(uid)) as unknown as {
     exportToR2(uid: string, dateIso: string): Promise<{ key: string; rows: number }>;
     importNdjson(text: string): Promise<{ meta: number; traits: number; signals: number }>;
+    getContext(): Promise<PersonaContext>;
+    getTraits(prefix?: string): Promise<{ key: string; value: number; confidence: number }[]>;
+    isInterruptible(priority: 1 | 2 | 3): Promise<PersonaVerdict>;
+    recordSignal(sig: { sourceApp: string; type: string; entity?: string; value?: string }): Promise<{ accepted: boolean; affectedTraits: string[] }>;
+    recordAudit(client: string, tool: string): Promise<void>;
   };
 
 // Worker-originated phone alert (RUNBOOK §2). Fire-and-forget, never throws.
@@ -509,10 +528,19 @@ const SESSION_DAYS = 90;
 async function sessionOf(c: { req: { raw: Request }; env: Env }): Promise<{ uid: string; name: string | null } | null> {
   const s = await verifyToken(c.env.SESSION_SECRET, getCookie(c.req.raw, "sess"));
   if (!s || typeof s.uid !== "string") return null;
-  // Apple S2S revocation denylist: a consent-revoked/account-deleted user's
-  // outstanding 90-day cookies die immediately (stateless sessions can't be
-  // recalled any other way).
-  if (await c.env.KV.get(`revoked:${s.uid}`)) return null;
+  // Apple S2S revocation (review fix): the denylist stores the revocation
+  // TIMESTAMP, not a permanent tombstone. A session is killed only if it was
+  // issued at/before the revocation — so a user who RE-AUTHORISES gets a
+  // fresh session (iat > revokedAt) that survives, with no key deletion, and
+  // the key carries a TTL so it can't outlive the longest possible session.
+  // Honest bound: Workers KV is eventually consistent, so recall is
+  // near-immediate (~seconds), not literally instant.
+  const revoked = await c.env.KV.get(`revoked:${s.uid}`);
+  if (revoked) {
+    const revokedAt = Number(revoked);
+    const iat = typeof s.iat === "number" ? s.iat : 0;
+    if (!iat || iat <= revokedAt) return null;
+  }
   return { uid: s.uid, name: typeof s.name === "string" ? s.name : null };
 }
 
@@ -568,9 +596,11 @@ app.post("/auth/apple/callback", async (c) => {
   if (name) await stub.importV2({ name });
   else name = (await stub.getConfig()).name;
 
+  const nowSec = Math.floor(Date.now() / 1000);
   const sess = await signToken(c.env.SESSION_SECRET!, {
     uid, name, email: payload.email ?? null,
-    exp: Math.floor(Date.now() / 1000) + 60 * 60 * 24 * SESSION_DAYS,
+    iat: nowSec, // review fix: lets a re-authorised user outlive a prior revocation
+    exp: nowSec + 60 * 60 * 24 * SESSION_DAYS,
   });
   const h = new Headers({ Location: "/" });
   h.append("Set-Cookie", `sess=${encodeURIComponent(sess)}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${60 * 60 * 24 * SESSION_DAYS}`);
@@ -613,7 +643,11 @@ app.post("/auth/apple/events", async (c) => {
   const sub = String(event.sub ?? "");
   if (sub && (type === "consent-revoked" || type === "account-delete")) {
     const uid = `apple:${sub}`;
-    await c.env.KV.put(`revoked:${uid}`, JSON.stringify({ type, at: new Date().toISOString() }));
+    // Store the revocation SECOND; sessions with iat <= this die. TTL a few
+    // days beyond the max session so the key self-cleans (review fix).
+    await c.env.KV.put(`revoked:${uid}`, String(Math.floor(Date.now() / 1000)), {
+      expirationTtl: (SESSION_DAYS + 3) * 86400,
+    });
     alarm(
       c.env,
       c.executionCtx,
@@ -654,15 +688,170 @@ app.post("/api/read", async (c) => {
   if (!["delivered", "seen", "read", "dismissed"].includes(state)) {
     return c.json({ ok: false, error: "bad state" }, 400);
   }
+  // Derive the ledger key the SAME way ingest does (review fix): only a
+  // well-formed public URL produces a u: key that can match a stored story;
+  // canonUrl never returns empty for non-empty input, so an unparseable/
+  // private URL must fall through to the title key, not become a garbage
+  // primary key. URL is length-clamped like ingest.
   const desk = cleanDeskId(p.desk);
-  const title = String(p.title ?? "");
-  const key = urlKey({ url: p.url }) ?? (desk && title ? titleKey({ category: desk, title }) : null);
+  const title = String(p.title ?? "").slice(0, TITLE_STORE_MAX);
+  const url = String(p.url ?? "").slice(0, URL_STORE_MAX);
+  const key = safePublicUrl(url)
+    ? urlKey({ url })
+    : desk && title
+      ? titleKey({ category: desk, title })
+      : null;
   if (!key) return c.json({ ok: false, error: "no story key" }, 400);
   await c.env.DB.prepare(
     `INSERT INTO read_ledger (user_id, story_key, state, at) VALUES (?1, ?2, ?3, ?4)
      ON CONFLICT(user_id, story_key) DO UPDATE SET state = excluded.state, at = excluded.at`,
   ).bind(sess.uid, key, state, new Date().toISOString()).run();
   return c.json({ ok: true, key, state });
+});
+
+// ---- Persona tool surface (V3_BLUEPRINT §4) --------------------------------
+// One profile per user, exposed to client apps (The Wire itself, future
+// Wire FM / meal-planner) as scope-gated tools. Dormant until
+// PERSONA_JWT_SECRET is set. Auth: HS256 bearer token minted by the admin
+// CLI, carrying scopes + optional uid pin; the client registry (D1) is the
+// revocation surface (delete the row). Every call appends to the user's
+// audit ring buffer.
+
+async function personaAuth(
+  c: { req: { header(n: string): string | undefined }; env: Env },
+  needScope: string,
+): Promise<{ claims: PersonaClaims } | { error: Response }> {
+  if (!c.env.PERSONA_JWT_SECRET) {
+    return { error: Response.json({ ok: false, error: "persona dormant" }, { status: 503 }) };
+  }
+  const auth = c.req.header("authorization") ?? "";
+  const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+  const claims = await verifyPersonaToken(c.env.PERSONA_JWT_SECRET, token);
+  if (!claims) return { error: Response.json({ ok: false, error: "unauthorised" }, { status: 401 }) };
+  // Registry check = revocation (deleting the client row kills its tokens).
+  const row = await c.env.DB.prepare("SELECT client_id FROM clients WHERE client_id = ?1")
+    .bind(claims.sub).first();
+  if (!row) return { error: Response.json({ ok: false, error: "client revoked" }, { status: 401 }) };
+  if (!claims.scopes.includes(needScope)) {
+    return { error: Response.json({ ok: false, error: `missing scope ${needScope}` }, { status: 403 }) };
+  }
+  return { claims };
+}
+
+// The uid a call targets: a uid-pinned token may only act on its own user;
+// an unpinned token names the uid in the query/body.
+function personaUid(claims: PersonaClaims, requested: string | undefined): string | null {
+  if (claims.uid) return !requested || requested === claims.uid ? claims.uid : null;
+  return requested && /^apple:[A-Za-z0-9._-]{1,80}$/.test(requested) ? requested : null;
+}
+
+// Tool list, filtered to the caller's scopes (§8: unscoped tools are invisible).
+app.get("/api/persona/tools", async (c) => {
+  if (!c.env.PERSONA_JWT_SECRET) return c.json({ ok: false, error: "persona dormant" }, 503);
+  const auth = c.req.header("authorization") ?? "";
+  const claims = await verifyPersonaToken(c.env.PERSONA_JWT_SECRET, auth.startsWith("Bearer ") ? auth.slice(7) : "");
+  if (!claims) return c.json({ ok: false, error: "unauthorised" }, 401);
+  return c.json({
+    ok: true,
+    client: claims.sub,
+    tools: PERSONA_TOOLS.filter((t) => claims.scopes.includes(t.scope)),
+  });
+});
+
+app.get("/api/persona/get_context", async (c) => {
+  const a = await personaAuth(c, "context:read");
+  if ("error" in a) return a.error;
+  const uid = personaUid(a.claims, c.req.query("uid"));
+  if (!uid) return c.json({ ok: false, error: "uid not permitted" }, 403);
+  const stub = profileStub(c.env, uid);
+  const ctx = await stub.getContext();
+  c.executionCtx.waitUntil(stub.recordAudit(a.claims.sub, "get_context"));
+  return c.json({ ok: true, uid, context: ctx });
+});
+
+app.get("/api/persona/get_traits", async (c) => {
+  const a = await personaAuth(c, "traits:read");
+  if ("error" in a) return a.error;
+  const uid = personaUid(a.claims, c.req.query("uid"));
+  if (!uid) return c.json({ ok: false, error: "uid not permitted" }, 403);
+  const stub = profileStub(c.env, uid);
+  const traits = await stub.getTraits(c.req.query("prefix") ?? undefined);
+  c.executionCtx.waitUntil(stub.recordAudit(a.claims.sub, "get_traits"));
+  return c.json({ ok: true, uid, traits });
+});
+
+app.get("/api/persona/is_interruptible", async (c) => {
+  const a = await personaAuth(c, "policy:eval");
+  if ("error" in a) return a.error;
+  const uid = personaUid(a.claims, c.req.query("uid"));
+  if (!uid) return c.json({ ok: false, error: "uid not permitted" }, 403);
+  const pr = Number(c.req.query("priority"));
+  const priority = pr === 3 ? 3 : pr === 2 ? 2 : 1;
+  const stub = profileStub(c.env, uid);
+  const verdict = await stub.isInterruptible(priority);
+  c.executionCtx.waitUntil(stub.recordAudit(a.claims.sub, "is_interruptible"));
+  return c.json({ ok: true, uid, priority, ...verdict });
+});
+
+app.post("/api/persona/record_signal", async (c) => {
+  const a = await personaAuth(c, "signals:write");
+  if ("error" in a) return a.error;
+  const bodyText = await readBodyBounded(c.req.raw, 16 * 1024);
+  if (bodyText === null) return c.json({ ok: false, error: "payload too large" }, 413);
+  let p: { uid?: string; type?: string; entity?: string; value?: string };
+  try {
+    p = JSON.parse(bodyText);
+  } catch {
+    return c.json({ ok: false, error: "invalid JSON" }, 400);
+  }
+  const uid = personaUid(a.claims, p.uid);
+  if (!uid) return c.json({ ok: false, error: "uid not permitted" }, 403);
+  if (!p.type) return c.json({ ok: false, error: "type required" }, 400);
+  const stub = profileStub(c.env, uid);
+  const res = await stub.recordSignal({
+    sourceApp: a.claims.sub,
+    type: String(p.type).slice(0, 60),
+    entity: p.entity ? String(p.entity).slice(0, 80) : undefined,
+    value: p.value ? String(p.value).slice(0, 200) : undefined,
+  });
+  c.executionCtx.waitUntil(stub.recordAudit(a.claims.sub, "record_signal"));
+  return c.json({ ok: true, uid, ...res });
+});
+
+// Client registry management (machine-gated: this is operator-only, and the
+// admin CLI mints the matching token). Register before minting; delete to
+// revoke every token that client holds.
+app.post("/api/admin/persona-client", async (c) => {
+  const gate = await machineGate(c);
+  if (gate) return gate;
+  const bodyText = await readBodyBounded(c.req.raw, 8 * 1024);
+  if (bodyText === null) return c.json({ ok: false, error: "payload too large" }, 413);
+  let p: { clientId?: string; name?: string; scopes?: string[]; action?: string };
+  try {
+    p = JSON.parse(bodyText);
+  } catch {
+    return c.json({ ok: false, error: "invalid JSON" }, 400);
+  }
+  const clientId = String(p.clientId ?? "").replace(/[^a-z0-9._-]/gi, "").slice(0, 60);
+  if (!clientId) return c.json({ ok: false, error: "bad clientId" }, 400);
+  if (p.action === "revoke") {
+    await c.env.DB.prepare("DELETE FROM clients WHERE client_id = ?1").bind(clientId).run();
+    return c.json({ ok: true, clientId, revoked: true });
+  }
+  const scopes = Array.isArray(p.scopes) ? p.scopes.map(String).slice(0, 20) : [];
+  await c.env.DB.prepare(
+    `INSERT INTO clients (client_id, name, scopes, created_at) VALUES (?1, ?2, ?3, ?4)
+     ON CONFLICT(client_id) DO UPDATE SET name = excluded.name, scopes = excluded.scopes`,
+  ).bind(clientId, String(p.name ?? clientId).slice(0, 80), JSON.stringify(scopes), new Date().toISOString()).run();
+  return c.json({ ok: true, clientId, scopes });
+});
+
+// Per-user Persona audit — the signed-in user sees who read what.
+app.get("/api/persona/audit", async (c) => {
+  const sess = await sessionOf(c);
+  if (!sess) return c.json({ ok: false, error: "sign in required" }, 401);
+  const stub = profileStub(c.env, sess.uid) as unknown as { getAudit(limit?: number): Promise<{ at: string; client: string; tool: string }[]> };
+  return c.json({ ok: true, audit: await stub.getAudit(50) });
 });
 
 // Restore-drill door (RUNBOOK §4): loads an NDJSON dump into a SCRATCH
@@ -688,6 +877,13 @@ app.post("/api/admin/restore-drill", async (c) => {
 });
 
 app.notFound((c) => c.json({ ok: false, error: "not found" }, 404));
+
+// Any uncaught throw becomes a clean 500 JSON, never a raw stack (review fix:
+// backstop for the getCookie/URIError class and anything else).
+app.onError((err, c) => {
+  console.error("wire-api error:", err instanceof Error ? err.message : String(err));
+  return c.json({ ok: false, error: "internal error" }, 500);
+});
 
 // Nightly DO sweep (RUNBOOK §4): NewsroomDO dumps itself, then every known
 // ProfileDO via the users registry. Failures alarm — a backup that silently
@@ -740,7 +936,10 @@ app.post("/api/admin/sweep", async (c) => {
 
 export default {
   fetch: app.fetch,
-  scheduled(controller: { cron: string }, env: Env, ctx: ExecutionContext) {
-    if (controller.cron === "30 3 * * *") ctx.waitUntil(nightlySweep(env, ctx));
+  // Single cron (wrangler.toml [triggers]); run the sweep on any scheduled
+  // invocation rather than matching a duplicated literal (review fix — the
+  // string is defined once, in wrangler.toml).
+  scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext) {
+    ctx.waitUntil(nightlySweep(env, ctx));
   },
 };

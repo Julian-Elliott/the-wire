@@ -39,7 +39,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 2
+          fetch-depth: 0  # full history so the migration diff sees every pushed commit
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
@@ -48,11 +48,20 @@ jobs:
       - run: npm ci
 
       # DO migrations must ship alone and are never auto-rolled-back (RUNBOOK §1).
+      # Diff the WHOLE pushed range (before..after), not just HEAD^..HEAD, so a
+      # migration change in any commit of a multi-commit push is caught, and
+      # the new-migration-file case (v3/migrations/) too (review fix).
       - name: Detect migration change
         id: mig
         working-directory: .
+        env:
+          BEFORE: ${{ github.event.before }}
         run: |
-          if git diff HEAD^ HEAD -- v3/wrangler.toml | grep -q 'migrations'; then
+          RANGE="HEAD~1 HEAD"
+          if [ -n "$BEFORE" ] && [ "$BEFORE" != "0000000000000000000000000000000000000000" ] && git cat-file -e "$BEFORE" 2>/dev/null; then
+            RANGE="$BEFORE HEAD"
+          fi
+          if git diff $RANGE -- v3/wrangler.toml v3/migrations | grep -qi 'migration'; then
             echo "changed=true" >> "$GITHUB_OUTPUT"
           else
             echo "changed=false" >> "$GITHUB_OUTPUT"

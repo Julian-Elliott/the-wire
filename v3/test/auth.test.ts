@@ -75,15 +75,31 @@ describe("POST /auth/apple/events", () => {
   });
 });
 
-describe("session revocation denylist", () => {
-  it("a denylisted uid's valid cookie stops working", async () => {
-    const cookie = await sessionCookie("apple:revoked-user");
-    expect((await SELF.fetch(`${BASE}/api/me`, { headers: { cookie } })).status).toBe(200);
-    await ((env as Record<string, any>).KV as KVNamespace).put(
-      "revoked:apple:revoked-user",
-      JSON.stringify({ type: "consent-revoked" }),
-    );
-    expect((await SELF.fetch(`${BASE}/api/me`, { headers: { cookie } })).status).toBe(401);
+describe("session revocation (timestamp-based)", () => {
+  const kv = () => (env as Record<string, any>).KV as KVNamespace;
+
+  it("a session issued BEFORE the revocation dies; a later re-auth survives", async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const oldCookie =
+      "sess=" + encodeURIComponent(await signToken(SECRET, { uid: "apple:rev1", iat: now - 100, exp: now + 3600 }));
+    expect((await SELF.fetch(`${BASE}/api/me`, { headers: { cookie: oldCookie } })).status).toBe(200);
+
+    // Apple revokes now: the pre-existing session must stop working.
+    await kv().put("revoked:apple:rev1", String(now));
+    expect((await SELF.fetch(`${BASE}/api/me`, { headers: { cookie: oldCookie } })).status).toBe(401);
+
+    // The user re-authorises: a fresh session (iat after the revocation) works
+    // again with no key deletion — the permanent-lockout bug is fixed.
+    const freshCookie =
+      "sess=" + encodeURIComponent(await signToken(SECRET, { uid: "apple:rev1", iat: now + 10, exp: now + 3600 }));
+    expect((await SELF.fetch(`${BASE}/api/me`, { headers: { cookie: freshCookie } })).status).toBe(200);
+  });
+});
+
+describe("malformed cookies never 500 (review fix)", () => {
+  it("a broken percent-escape is treated as no session, not a crash", async () => {
+    const res = await SELF.fetch(`${BASE}/api/me`, { headers: { cookie: "sess=%zz%" } });
+    expect(res.status).toBe(401);
   });
 });
 

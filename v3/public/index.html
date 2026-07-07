@@ -98,6 +98,9 @@
   };
 
   const host = (u) => { try { return new URL(u).hostname.replace(/^www\./, ""); } catch { return ""; } };
+  // Defence in depth: only ever render http(s) links (ingest already gates
+  // to public URLs, but the reader refuses javascript:/data: regardless).
+  const safeUrl = (u) => (/^https?:\/\//i.test(String(u || "")) ? String(u) : "#");
 
   function renderDesks() {
     const desks = [...new Set(items.map((i) => i.desk))].sort();
@@ -122,7 +125,7 @@
           <span>${esc(host(i.url))}</span>
           <span>${esc(ago(i.addedAt))}</span>
         </div>
-        <h2><a href="${esc(i.url)}" target="_blank" rel="noopener noreferrer">${esc(i.title)}</a></h2>
+        <h2><a href="${esc(safeUrl(i.url))}" target="_blank" rel="noopener noreferrer">${esc(i.title)}</a></h2>
         <p class="summary">${esc(i.summary)}</p>
         ${i.why ? `<p class="why">${esc(i.why)}</p>` : ""}
         ${i.quote ? `<blockquote>“${esc(i.quote)}”</blockquote>` : ""}

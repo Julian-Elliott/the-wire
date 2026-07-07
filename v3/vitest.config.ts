@@ -16,6 +16,7 @@ export default defineConfig(async () => {
             VALIDATE_LIVENESS: "off", // network validation is unit-tested with an injected fetcher
             SESSION_SECRET: "test-session-secret",
             APPLE_CLIENT_ID: "test.services.id",
+            PERSONA_JWT_SECRET: "test-persona-secret",
             TEST_MIGRATIONS: migrations,
           },
         },

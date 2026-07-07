@@ -94,6 +94,9 @@ new_sqlite_classes = ["NewsroomDO", "ProfileDO"]
 # c.env.AI undefined and exercise the graceful-absence path by construction.
 # Clustering itself is tested with synthetic vectors via direct DO RPC.
 [env.test]
+# Never inherit the production custom domain — a stray `deploy --env test`
+# must not reassign wire.databased.business away from the real Worker.
+routes = []
 
 [[env.test.kv_namespaces]]
 binding = "KV"

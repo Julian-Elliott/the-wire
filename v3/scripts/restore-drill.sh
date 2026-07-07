@@ -21,7 +21,14 @@ npx wrangler r2 object get "wire-backups/d1/${DATE}.sql.gz" --file=/tmp/drill-d1
 gunzip -f /tmp/drill-d1.sql.gz
 
 echo "-- D1: restoring into throwaway DB wire-restore-test"
-npx wrangler d1 create wire-restore-test >/dev/null 2>&1 || true
+# Tolerate "already exists" but surface real errors (auth/permission) instead
+# of masking them with 2>&1 || true (review fix).
+create_out=$(npx wrangler d1 create wire-restore-test 2>&1) || true
+if echo "$create_out" | grep -qiE 'error|unauthor|forbidden' && ! echo "$create_out" | grep -qi 'already exists'; then
+  echo "$create_out"
+  echo "!! could not create the throwaway DB — aborting drill"
+  exit 1
+fi
 npx wrangler d1 execute wire-restore-test --remote --file=/tmp/drill-d1.sql -y >/dev/null
 
 fail=0

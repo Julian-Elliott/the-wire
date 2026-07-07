@@ -66,6 +66,15 @@ export class ProfileDO extends DurableObject<Env> {
           key   TEXT PRIMARY KEY,
           value TEXT NOT NULL
         );
+
+        -- Per-user audit ring buffer (V3_BLUEPRINT §4/§8): every client read
+        -- is inspectable ("The Wire read topic.football 14x this week").
+        CREATE TABLE IF NOT EXISTS audit (
+          id     INTEGER PRIMARY KEY AUTOINCREMENT,
+          at     TEXT NOT NULL,
+          client TEXT NOT NULL,
+          tool   TEXT NOT NULL
+        );
       `);
       // Weekly decay/prune sweep — the decay job owns the traits table.
       if ((await ctx.storage.getAlarm()) === null) {
@@ -196,7 +205,14 @@ export class ProfileDO extends DurableObject<Env> {
         key, value,
       );
     if (payload.name) putMeta("name", String(payload.name).slice(0, 80));
-    if (payload.config) putMeta("v2config", JSON.stringify(payload.config).slice(0, 8192));
+    if (payload.config) {
+      // Store the whole config JSON — a blind character slice truncates
+      // mid-JSON and getConfig's parse then silently loses it (review fix).
+      // Skip an implausibly large config rather than corrupt it; the import
+      // door already bounds the request body.
+      const cfg = JSON.stringify(payload.config);
+      if (cfg.length <= 200_000) putMeta("v2config", cfg);
+    }
 
     let seeded = 0;
     for (const t of payload.traits ?? []) {
@@ -284,6 +300,68 @@ export class ProfileDO extends DurableObject<Env> {
       }
     }
     return counts;
+  }
+
+  // Ring-buffered access audit (cap 200 rows per user).
+  async recordAudit(client: string, tool: string, nowMs = Date.now()): Promise<void> {
+    this.ctx.storage.sql.exec(
+      "INSERT INTO audit (at, client, tool) VALUES (?,?,?)",
+      new Date(nowMs).toISOString(), client.slice(0, 60), tool.slice(0, 40),
+    );
+    this.ctx.storage.sql.exec(
+      "DELETE FROM audit WHERE id NOT IN (SELECT id FROM audit ORDER BY id DESC LIMIT 200)",
+    );
+  }
+
+  async getAudit(limit = 50): Promise<{ at: string; client: string; tool: string }[]> {
+    return this.ctx.storage.sql
+      .exec<{ at: string; client: string; tool: string }>(
+        "SELECT at, client, tool FROM audit ORDER BY id DESC LIMIT ?",
+        Math.min(Math.max(1, limit), 200),
+      )
+      .toArray();
+  }
+
+  // The compact brief a client injects into a prompt (SOURCE_STRATEGIES 4.8):
+  // decayed traits COMPILED into a handful of numeric dials plus the top desk
+  // affinities — never a raw trait dump.
+  async getContext(nowMs = Date.now()): Promise<{
+    name: string | null;
+    state: { value: string; ageMinutes: number } | null;
+    place: string | null;
+    dials: { DEPTH: number; INTERRUPT_THRESHOLD: number; LEVITY: number };
+    topDesks: { desk: string; weight: number }[];
+  }> {
+    const cfg = await this.getConfig();
+    const meta = new Map(
+      this.ctx.storage.sql
+        .exec<{ key: string; value: string }>(
+          "SELECT key, value FROM meta WHERE key IN ('state','state_at','place')",
+        )
+        .toArray()
+        .map((r) => [r.key, r.value]),
+    );
+    const stateAt = Number(meta.get("state_at") ?? 0);
+    const state = meta.get("state")
+      ? { value: meta.get("state")!, ageMinutes: Math.round((nowMs - stateAt) / 60_000) }
+      : null;
+
+    const dialOf = async (key: string, dflt: number) => {
+      const t = (await this.getTraits(`dial.${key}`, nowMs))[0];
+      return t ? t.value : dflt;
+    };
+    const dials = {
+      DEPTH: await dialOf("depth", 1),
+      INTERRUPT_THRESHOLD: await dialOf("interrupt_threshold", 2),
+      LEVITY: await dialOf("levity", 0.5),
+    };
+
+    const topDesks = (await this.getTraits("desk.weight.", nowMs))
+      .sort((a, b) => b.value - a.value)
+      .slice(0, 8)
+      .map((t) => ({ desk: t.key.slice("desk.weight.".length), weight: Math.round(t.value * 100) / 100 }));
+
+    return { name: cfg.name, state, place: meta.get("place") ?? null, dials, topDesks };
   }
 
   async ping(): Promise<{ ok: true; signals: number; traits: number }> {

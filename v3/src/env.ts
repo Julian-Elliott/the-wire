@@ -18,6 +18,7 @@ export interface Env {
   NTFY_TOPIC?: string; // arms Worker-originated phone alerts (RUNBOOK §2)
   SESSION_SECRET?: string; // arms Sign in with Apple (with APPLE_CLIENT_ID)
   APPLE_DOMAIN_ASSOCIATION?: string; // served at /.well-known when set
+  PERSONA_JWT_SECRET?: string; // arms the Persona tool surface (HS256 client tokens)
 
   // Plain vars:
   VALIDATE_LIVENESS?: string; // "off" skips network validation (tests/dev only)

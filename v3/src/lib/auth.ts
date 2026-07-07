@@ -41,7 +41,15 @@ export function getCookie(req: Request, name: string): string | null {
   const c = req.headers.get("Cookie") ?? "";
   for (const part of c.split(/;\s*/)) {
     const i = part.indexOf("=");
-    if (i > 0 && part.slice(0, i) === name) return decodeURIComponent(part.slice(i + 1));
+    if (i > 0 && part.slice(0, i) === name) {
+      // A malformed percent-escape (e.g. "%", "%zz") makes decodeURIComponent
+      // throw URIError; treat a broken cookie as absent, never a 500.
+      try {
+        return decodeURIComponent(part.slice(i + 1));
+      } catch {
+        return null;
+      }
+    }
   }
   return null;
 }
@@ -66,8 +74,10 @@ export async function verifyToken(
   secret: string | undefined,
   token: string | null,
 ): Promise<Record<string, unknown> | null> {
-  if (!secret || !token || token.indexOf(".") < 0) return null;
-  const [body, sig] = token.split(".");
+  if (!secret || !token) return null;
+  const segs = token.split(".");
+  if (segs.length !== 2) return null; // our tokens are exactly body.sig
+  const [body, sig] = segs;
   let ok = false;
   try {
     ok = await crypto.subtle.verify(
@@ -95,11 +105,21 @@ let appleKeysAt = 0;
 
 async function appleKeys(): Promise<AppleJwk[]> {
   if (appleKeysCache && Date.now() - appleKeysAt < 3_600_000) return appleKeysCache;
-  const res = await fetch("https://appleid.apple.com/auth/keys");
-  const data = (await res.json()) as { keys?: AppleJwk[] };
-  appleKeysCache = data.keys ?? [];
-  appleKeysAt = Date.now();
-  return appleKeysCache;
+  // Only cache a NON-EMPTY successful fetch (review fix): a transient 5xx or
+  // an empty body must not poison the hour-long cache and fail every sign-in.
+  try {
+    const res = await fetch("https://appleid.apple.com/auth/keys");
+    if (res.ok) {
+      const data = (await res.json()) as { keys?: AppleJwk[] };
+      if (Array.isArray(data.keys) && data.keys.length) {
+        appleKeysCache = data.keys;
+        appleKeysAt = Date.now();
+      }
+    }
+  } catch {
+    /* fall through to whatever we last held */
+  }
+  return appleKeysCache ?? [];
 }
 
 export interface AppleIdPayload {

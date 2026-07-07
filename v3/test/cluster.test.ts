@@ -77,6 +77,34 @@ describe("clusterCandidate verdicts", () => {
   it("thresholds are ordered sanely", () => {
     expect(DUP_COSINE).toBeGreaterThan(SAGA_COSINE);
   });
+
+  it("a real duplicate is NOT shadowed by a higher-cosine non-qualifier (review fix)", () => {
+    const window = [
+      // Highest cosine but shares NO significant title token — must not shadow.
+      { story_id: "hi", saga_id: null, desk: "world", title: "Zzzz qqqq wwww", vec: vec(1, 0.3, 0.01) },
+      // True same-desk duplicate, slightly lower cosine, shares tokens.
+      { story_id: "dup", saga_id: null, desk: "world", title: "Reactor deal signed today", vec: vec(1, 0.32, 0) },
+    ];
+    const v = clusterCandidate(
+      { desk: "world", title: "Reactor deal signed with consortium today", vec: vec(1, 0.3, 0) },
+      window,
+    );
+    expect(v.kind).toBe("duplicate");
+    expect(v.matchId).toBe("dup");
+  });
+
+  it("prefers a same-desk duplicate over a cross-desk saga sibling", () => {
+    const window = [
+      { story_id: "cross", saga_id: "s9", desk: "ev", title: "Reactor deal signed today", vec: vec(1, 0.29, 0) },
+      { story_id: "same", saga_id: null, desk: "world", title: "Reactor deal signed today", vec: vec(1, 0.31, 0) },
+    ];
+    const v = clusterCandidate(
+      { desk: "world", title: "Reactor deal signed today", vec: vec(1, 0.3, 0) },
+      window,
+    );
+    expect(v.kind).toBe("duplicate");
+    expect(v.matchId).toBe("same");
+  });
 });
 
 describe("NewsroomDO clustering (synthetic vectors, direct RPC)", () => {
