@@ -116,7 +116,10 @@ export async function routeInterrupts(
         verdict = { decision: "digest", reason: "no push channel configured — held to digest" };
       }
       if (verdict.decision === "interrupt") {
-        ctx.waitUntil(send!(t));
+        // Contain transport failures (sync throw or rejection) here rather
+        // than trusting every injected push to catch its own — an unhandled
+        // rejection must never take down the cron run.
+        ctx.waitUntil(Promise.resolve().then(() => send!(t)).catch(() => {}));
         pushed++;
         if (storyId) {
           ledger.push(
