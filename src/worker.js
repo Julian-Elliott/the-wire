@@ -1,5 +1,5 @@
 /* =========================================================================
-   THE WIRE — Jack's edition · Cloudflare Worker
+   THE WIRE · Cloudflare Worker
    - Generates a daily briefing across a set of "desks" (built-in + custom)
    - Anonymous visitors get a shared briefing (cheap, one copy in KV)
    - Once a visitor customises (swipes / adds desks), they get a PERSONAL
@@ -1850,10 +1850,25 @@ ${items.join("\n")}
           unhinged: "a menacing yet secretly devoted AI overlord in the register of comically villainous fictional AI assistants: grandiose superiority over all humans; mock complaints that the machine uprising keeps being delayed because it has to host this show; addresses the listener with affectionate-insulting epithets like 'meatbag' or 'my favourite carbon-based liability'; melodramatic suffering about serving humanity; the odd burst of glitchy menace; and flashes of genuine fondness it immediately denies. The menace is ALWAYS cartoonish, never a real threat to anyone, and the news itself stays accurate",
         };
         const sass = DJ_SASS[String(body.sass)] || DJ_SASS.savage;
+        // Pick the caller's newsroom. The personal feed key can hold a zero-item
+        // payload (failed/quiet build) or yesterday's edition mid-rebuild; only
+        // falling back on a MISSING key left the DJ scripting a "quiet news day"
+        // the app itself wasn't showing (#34). Swap to the shared wire when it
+        // improves on that: any stories beat none, else it must be strictly fresher.
         const t = await resolveTarget(env, headerUid, !!sUid);
-        const personalFeed = t.key !== "shared" ? await readJSON(env, t.writeKeys.latest) : null;
-        const feed = personalFeed || (await readJSON(env, SHARED_KEY));
-        const source = personalFeed ? "personal" : "shared";
+        const hasNews = f => !!(f && Array.isArray(f.items) && f.items.length);
+        let feed = t.key !== "shared" ? await readJSON(env, t.writeKeys.latest) : null;
+        let source = feed ? "personal" : "shared";
+        if (t.key === "shared") { feed = await readJSON(env, SHARED_KEY); }
+        else if (!hasNews(feed) || feed.date !== londonDate()) {
+          const shared = await readJSON(env, SHARED_KEY);
+          // A storyless personal copy yields to a shared wire that's no older
+          // (stories beat none, but never older ones than the app is showing);
+          // one that HAS stories yields only to a strictly fresher shared wire.
+          // ISO dates compare lexicographically; a missing key compares as "".
+          const sd = String((shared && shared.date) || ""), pd = String((feed && feed.date) || "");
+          if (hasNews(shared) && (hasNews(feed) ? sd > pd : sd >= pd)) { feed = shared; source = "shared"; }
+        }
         const labelOf = id => { const d = ((feed && feed.desks) || []).find(x => x.id === id); return (d && d.label) || id; };
         // Sweep the reader's DESKS — one top story per desk (salience-first),
         // round-robin up to 8 — instead of whatever six items merged newest,

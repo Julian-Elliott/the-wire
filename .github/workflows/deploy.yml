@@ -1,6 +1,6 @@
 name: Deploy (Cloudflare Workers)
 
-# Deploys "The Wire — Jack's edition" to Cloudflare Workers.
+# Deploys "The Wire" to Cloudflare Workers.
 #
 # Required repository secrets (Settings → Secrets and variables → Actions):
 #   CLOUDFLARE_API_TOKEN  – a Cloudflare API token with the "Edit Cloudflare Workers"
