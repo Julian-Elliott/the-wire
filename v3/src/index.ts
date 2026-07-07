@@ -710,6 +710,18 @@ app.post("/api/read", async (c) => {
   return c.json({ ok: true, key, state });
 });
 
+// Why-demoted notes (V3_BLUEPRINT §5 trust UX): the signed-in reader sees
+// every priority-3 that was held back from interrupting them, and why.
+// Keyed by story_id so the client joins against /api/feed/latest items.
+app.get("/api/me/demotions", async (c) => {
+  const sess = await sessionOf(c);
+  if (!sess) return c.json({ ok: false, error: "sign in required" }, 401);
+  const rows = await c.env.DB.prepare(
+    "SELECT story_id, decision, reason, at FROM demotion_ledger WHERE user_id = ?1 ORDER BY at DESC LIMIT 100",
+  ).bind(sess.uid).all<{ story_id: string; decision: string; reason: string; at: string }>();
+  return c.json({ ok: true, demotions: rows.results });
+});
+
 // ---- Persona tool surface (V3_BLUEPRINT §4) --------------------------------
 // One profile per user, exposed to client apps (The Wire itself, future
 // Wire FM / meal-planner) as scope-gated tools. Dormant until

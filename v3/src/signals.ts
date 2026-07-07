@@ -31,6 +31,13 @@ function weatherkitCreds(env: Env) {
     : undefined;
 }
 
+// Content-address a trigger's story id from its dedup key — the SAME id
+// persistTriggers writes, so demotion-ledger rows join the feed by story id.
+async function storyIdOf(dedupKey: string): Promise<string> {
+  const idBuf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(dedupKey));
+  return [...new Uint8Array(idBuf)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
 // Trigger → newsroom story (via the SAME validated ingest path is overkill for
 // first-party triggers; they're already trustworthy, so we write directly to
 // NewsroomDO with content-addressed ids). Idempotent on the dedup key.
@@ -39,8 +46,7 @@ async function persistTriggers(env: Env, triggers: Trigger[]): Promise<number> {
   const nowIso = new Date().toISOString();
   const rows = await Promise.all(
     triggers.map(async (t) => {
-      const idBuf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(t.dedupKey));
-      const story_id = [...new Uint8Array(idBuf)].map((b) => b.toString(16).padStart(2, "0")).join("");
+      const story_id = await storyIdOf(t.dedupKey);
       return {
         story_id,
         embedding: null,
@@ -67,38 +73,77 @@ async function persistTriggers(env: Env, triggers: Trigger[]): Promise<number> {
   return (await stub.ingestBatch(rows)).inserted;
 }
 
-// Route a priority-3 trigger to each active user through their gate.
-async function routeInterrupts(
+export type PushFn = (t: Trigger) => Promise<unknown>;
+
+// Poor-man's APNs: the interrupt carries its trust-UX "why".
+const ntfyPush = (topic: string): PushFn => (t) =>
+  fetch(`https://ntfy.sh/${topic}`, {
+    method: "POST",
+    headers: { Title: t.title, Priority: "urgent", Tags: "rotating_light" },
+    body: `${t.summary}\n\nwhy: ${t.why}`,
+  }).catch(() => {});
+
+// Route a priority-3 trigger to each active user through their gate. Every
+// demotion is WRITTEN DOWN (V3_BLUEPRINT §5 trust UX): the reader shows a
+// "why demoted" note, never a silent drop — including when no push channel
+// is configured at all (honest degradation over fudged parity). A story
+// that later passes the gate clears its demotion row: it was delivered.
+// Synthetic test triggers are routed but never persisted (no feed row for
+// a ledger row to join). `push` is injectable for tests; default is ntfy.
+export async function routeInterrupts(
   env: Env,
   ctx: { waitUntil(p: Promise<unknown>): void },
   triggers: Trigger[],
+  push?: PushFn,
 ): Promise<{ pushed: number; heldToDigest: number }> {
   const p3 = triggers.filter((t) => t.priority === 3);
-  if (!p3.length || !env.NTFY_TOPIC) return { pushed: 0, heldToDigest: 0 };
+  if (!p3.length) return { pushed: 0, heldToDigest: 0 };
   const users = await env.DB.prepare("SELECT uid FROM users").all<{ uid: string }>();
+  if (!users.results.length) return { pushed: 0, heldToDigest: 0 };
+  const send = push ?? (env.NTFY_TOPIC ? ntfyPush(env.NTFY_TOPIC) : undefined);
+  const nowIso = new Date().toISOString();
+  const ledger: D1PreparedStatement[] = [];
   let pushed = 0;
   let heldToDigest = 0;
   for (const t of p3) {
+    const storyId = t.source === "test" ? null : await storyIdOf(t.dedupKey);
     for (const { uid } of users.results) {
       const stub = env.PROFILES.get(env.PROFILES.idFromName(uid)) as unknown as {
         isInterruptible(priority: 1 | 2 | 3): Promise<{ decision: string; reason: string }>;
       };
-      const verdict = await stub.isInterruptible(3);
+      let verdict = await stub.isInterruptible(3);
+      if (verdict.decision === "interrupt" && !send) {
+        verdict = { decision: "digest", reason: "no push channel configured — held to digest" };
+      }
       if (verdict.decision === "interrupt") {
-        // Poor-man's APNs: the interrupt carries its trust-UX "why".
-        ctx.waitUntil(
-          fetch(`https://ntfy.sh/${env.NTFY_TOPIC}`, {
-            method: "POST",
-            headers: { Title: t.title, Priority: "urgent", Tags: "rotating_light" },
-            body: `${t.summary}\n\nwhy: ${t.why}`,
-          }).catch(() => {}),
-        );
+        // Contain transport failures (sync throw or rejection) here rather
+        // than trusting every injected push to catch its own — an unhandled
+        // rejection must never take down the cron run.
+        ctx.waitUntil(Promise.resolve().then(() => send!(t)).catch(() => {}));
         pushed++;
+        if (storyId) {
+          ledger.push(
+            env.DB.prepare("DELETE FROM demotion_ledger WHERE user_id = ?1 AND story_id = ?2")
+              .bind(uid, storyId),
+          );
+        }
       } else {
         heldToDigest++;
+        // First reason wins (DO NOTHING): "why wasn't I interrupted when
+        // this landed" is the honest answer, not the latest state.
+        if (storyId) {
+          ledger.push(
+            env.DB.prepare(
+              `INSERT INTO demotion_ledger (user_id, story_id, decision, reason, at)
+               VALUES (?1, ?2, ?3, ?4, ?5)
+               ON CONFLICT(user_id, story_id) DO NOTHING`,
+            ).bind(uid, storyId, verdict.decision === "silent" ? "silent" : "digest", verdict.reason, nowIso),
+          );
+        }
       }
     }
   }
+  if (ledger.length) await env.DB.batch(ledger);
   return { pushed, heldToDigest };
 }
 
