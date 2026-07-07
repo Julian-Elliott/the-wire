@@ -242,6 +242,28 @@ curl -sS -X POST "$INGEST_URL" \
 Write your assembled JSON to `payload.json` first, then run the curl so the body
 is exactly the JSON (no shell-escaping surprises).
 
+### 3b. Dual-post to v3 (when configured)
+
+If the environment variables `INGEST_URL_V3` and `INGEST_SECRET_V3` are BOTH
+set, also send the SAME `payload.json` to the v3 endpoint after the v2 POST:
+
+```bash
+curl -sS -X POST "$INGEST_URL_V3" \
+  -H "x-ingest-key: $INGEST_SECRET_V3" \
+  -H "Content-Type: application/json" \
+  --data @payload.json
+```
+
+Rules for the v3 leg:
+- **Non-fatal**: a failure here must never block or retry-loop the run. Try
+  once, retry once on a network error, then move on and report it.
+- v3 validates harder than v2 — its response includes `accepted`, `inserted`,
+  `rejected` (with reasons), `demoted`, `sagaLinked` and a `dropped` breakdown.
+  Echo these counts in your run summary; a non-zero `rejected` is worth a
+  sentence (it means a pinned URL was dead or a quote didn't verify).
+- If the vars are absent, skip this step silently — v2 remains the paper of
+  record until cut-over.
+
 ## 4. Verify, then stop
 
 A success looks like:

@@ -1,0 +1,53 @@
+# Weekly timebomb sweep (RUNBOOK §7): files an issue 30 days before each
+# date in .github/timebombs.yml, once per bomb per date.
+name: Timebombs
+
+on:
+  schedule:
+    - cron: "13 8 * * 1"
+  workflow_dispatch:
+
+permissions:
+  issues: write
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: File issues for bombs within 30 days
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'EOF'
+          import datetime, json, subprocess, sys
+
+          try:
+              import yaml
+          except ImportError:
+              subprocess.run([sys.executable, "-m", "pip", "install", "--quiet", "pyyaml"], check=True)
+              import yaml
+
+          today = datetime.date.today()
+          data = yaml.safe_load(open(".github/timebombs.yml"))
+          repo = subprocess.run(["gh", "repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"],
+                                capture_output=True, text=True, check=True).stdout.strip()
+
+          for bomb in data.get("bombs", []):
+              due = bomb["date"] if isinstance(bomb["date"], datetime.date) else datetime.date.fromisoformat(str(bomb["date"]))
+              days = (due - today).days
+              if not (0 <= days <= 30):
+                  continue
+              title = f"timebomb ({due.isoformat()}): {bomb['name']}"
+              existing = subprocess.run(
+                  ["gh", "issue", "list", "-R", repo, "--state", "all",
+                   "--search", f'"{title}" in:title', "--json", "number", "--jq", "length"],
+                  capture_output=True, text=True).stdout.strip()
+              if existing not in ("", "0"):
+                  continue
+              body = (f"Due **{due.isoformat()}** ({days} days).\n\n"
+                      f"Blast radius: {bomb.get('blast', 'unspecified')}.\n\n"
+                      f"Runbook: docs/RUNBOOK.md §7. After handling, update the date in .github/timebombs.yml.")
+              subprocess.run(["gh", "issue", "create", "-R", repo, "--title", title, "--body", body], check=True)
+              print(f"filed: {title}")
+          EOF

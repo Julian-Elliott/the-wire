@@ -64,6 +64,14 @@ APPLE_TEAM_ID = "7BL94Z94QH"
 # Routine is pushing the feed to /api/ingest, so the cron steps aside instead
 # of overwriting it with a metered build. See routines/SETUP.md.
 FEED_SOURCE = "routine"
+# Audio kill-switch: pauses the podcast, read-outs, tasters, beats and Wire FM.
+# Flipped OFF 2026-07-07 on the ElevenLabs Pro upgrade (500k credits/mo,
+# 192kbps output). Set back to "true" + deploy if spend runs hot.
+AUDIO_PAUSED = "false"
+# Podcast render frequency: "off" = minimum-spend mode — episodes render only
+# on first play (lazy, locked, once per episode); nothing renders for editions
+# nobody listens to. Set "on" to eagerly prewarm every edition at ingest.
+PODCAST_PREWARM = "off"
 #
 # /api/ingest stays dormant until the encrypted secret INGEST_SECRET is set
 # (wrangler secret put INGEST_SECRET — NOT committed here).

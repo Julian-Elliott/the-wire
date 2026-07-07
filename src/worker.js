@@ -762,6 +762,11 @@ async function resolveTarget(env, u, liveActive) {
 // briefing here. Dormant unless INGEST_SECRET is set, so deploys are safe
 // before the routine exists. See routines/SETUP.md.
 const ingestEnabled = env => !!(env.INGEST_SECRET && String(env.INGEST_SECRET).length >= 16);
+// Audio kill-switch (AUDIO_PAUSED="true" in wrangler.toml [vars]): blocks every
+// path that could spend ElevenLabs credits (renders, prewarms, tasters, beats,
+// readouts) plus Wire FM, while the UI shows a friendly "back soon" marker.
+// Flip to "false" (or remove) + deploy to bring everything back.
+const audioPaused = env => String(env.AUDIO_PAUSED || "").toLowerCase() === "true";
 
 function timingSafeEqual(a, b) {
   a = String(a || ""); b = String(b || "");
@@ -1000,10 +1005,13 @@ const BEATS = {
   outro: { key: "beats/outro_v1.mp3", music_length_ms: 3000, prompt: "warm resolving outro chord, gentle, fades out cleanly, no vocals" },
 };
 // Returns the beat's MP3 bytes (cached, or generated+cached on first use), or null
-// on any failure so a missing beat never blocks an episode. output_format is pinned
-// to mp3_44100_128 to MATCH the dialogue: the Music v2 default is 48kHz, which would
+// on any failure so a missing beat never blocks an episode. Beats stay at 128k
+// deliberately: they play as SEPARATE audio (never concatenated since 109acac),
+// are evergreen-cached, and re-rendering them buys nothing audible for stings.
+// output_format stays 44.1kHz: the Music v2 default is 48kHz, which would
 // play at the wrong pitch once byte-concatenated with the 44.1kHz dialogue.
 async function ensureBeat(env, kind) {
+  if (audioPaused(env)) return null;
   const b = BEATS[kind];
   if (!b || !env.WIRE_AUDIO || !env.ELEVENLABS_API_KEY) return null;
   try {
@@ -1062,7 +1070,7 @@ async function renderPodcast(env, turns) {
   // is preserved within each batch so the dialogue stays in sequence. A fixed seed
   // + stability keeps the multi-voice take controlled and reproducible.
   const renderChunk = async inputs => {
-    const res = await fetch("https://api.elevenlabs.io/v1/text-to-dialogue?output_format=mp3_44100_128", {
+    const res = await fetch("https://api.elevenlabs.io/v1/text-to-dialogue?output_format=mp3_44100_192", {
       method: "POST",
       headers: { "xi-api-key": env.ELEVENLABS_API_KEY, "content-type": "application/json" },
       // stability 0.35 (Creative side of Natural): livelier delivery, far more
@@ -1088,7 +1096,8 @@ async function renderPodcast(env, turns) {
 // Each rendered chunk declares ONLY ITS OWN length in that header, so players
 // read chunk one's header and believe the whole episode is that long (elapsed
 // overruns "total" while audio keeps playing). Without any Xing frame the
-// stream is plain CBR 128k and players time it correctly from byte length.
+// stream is plain CBR and players time it correctly from byte length
+// (bitrate-agnostic: the frame header is parsed, 128k and 192k both fine).
 function stripMp3Head(bytes) {
   let off = 0;
   if (bytes.length > 10 && bytes[0] === 0x49 && bytes[1] === 0x44 && bytes[2] === 0x33) {   // "ID3"
@@ -1124,7 +1133,7 @@ async function sha16(text) {
 // later get distinct keys, rather than colliding onto one cached MP3.
 // Bump POD_RENDER_VERSION whenever the rendering changes (e.g. adding beats) so
 // already-cached episodes re-render with the new audio instead of serving stale.
-const POD_RENDER_VERSION = "v6";   // v6: Xing/ID3 stripped per chunk (accurate duration); v5: exchange packing + stability 0.35
+const POD_RENDER_VERSION = "v7";   // v7: 192kbps output (ElevenLabs Pro); v6: Xing/ID3 stripped per chunk (accurate duration)
 async function podcastKey(turns, date) {
   const sig = await sha16(JSON.stringify(turns));
   return `podcast/${date || londonDate()}/${sig}-${POD_RENDER_VERSION}.mp3`;
@@ -1136,6 +1145,7 @@ async function podcastKey(turns, date) {
 // never cached and every play re-rendered from cold). A short KV lock keeps
 // concurrent triggers (page loads + play polls) from double-rendering.
 async function ensurePodcastRendered(env, turns, date, key) {
+  if (audioPaused(env)) return null;
   if (!env.WIRE_AUDIO || !env.ELEVENLABS_API_KEY || !Array.isArray(turns) || !turns.length) return null;
   key = key || await podcastKey(turns, date);
   const lockKey = `podcast:lock:${key}`;
@@ -1166,7 +1176,7 @@ async function ensurePodcastRendered(env, turns, date, key) {
 // Render one read-out to MP3 bytes via ElevenLabs Flash (cheap; cached so latency
 // only hits the first listener of each item).
 async function ttsRender(env, text, voiceId) {
-  const res = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?output_format=mp3_44100_128`, {
+  const res = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?output_format=mp3_44100_192`, {
     method: "POST",
     headers: { "xi-api-key": env.ELEVENLABS_API_KEY, "content-type": "application/json" },
     body: JSON.stringify({ model_id: "eleven_flash_v2_5", text }),
@@ -1588,6 +1598,7 @@ export default {
     // episode with them). Kept separate because beats are stereo and the voices are
     // mono; concatenating the two channel modes pitches the voice up in some players.
     if (url.pathname === "/api/beat") {
+      if (audioPaused(env)) return json({ error: "audio paused", paused: true }, 503);
       if (!env.ELEVENLABS_API_KEY || !env.WIRE_AUDIO) return json({ error: "audio not configured" }, 404);
       const kind = url.searchParams.get("k") === "outro" ? "outro" : "intro";
       const bytes = await ensureBeat(env, kind);
@@ -1599,11 +1610,12 @@ export default {
     // through the real dialogue pipeline, then served from R2 forever — the
     // fixed key set (4 styles) bounds unauthenticated render cost.
     if (url.pathname === "/api/style-preview") {
+      if (audioPaused(env)) return json({ error: "Tasters are paused while the voice budget refills — back soon.", paused: true }, 503);
       if (!env.ELEVENLABS_API_KEY || !env.WIRE_AUDIO) return json({ error: "audio not configured" }, 404);
       const s = String(url.searchParams.get("s") || "");
       const sample = STYLE_PREVIEWS[s];
       if (!sample) return json({ error: "unknown style" }, 404);
-      const key = `previews/${s}-v1.mp3`;
+      const key = `previews/${s}-v2.mp3`;   // v2: 192kbps (ElevenLabs Pro)
       let hit = await env.WIRE_AUDIO.get(key);
       if (!hit) {
         try {
@@ -1620,6 +1632,7 @@ export default {
     // builds 3x/day; the day's latest snapshot wins). Follow-by-URL in Apple
     // Podcasts / Overcast / Pocket Casts, or submit it properly later.
     if (url.pathname === "/feed.xml") {
+      if (audioPaused(env)) return new Response("Feed paused — back soon.", { status: 503, headers: { "retry-after": "86400" } });
       if (!env.WIRE_KV || !env.WIRE_AUDIO) return new Response("Not found", { status: 404 });
       const xesc = s => String(s == null ? "" : s).replace(/[<>&'"]/g, c => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", "'": "&apos;", '"': "&quot;" }[c]));
       const origin = `https://${url.hostname}`;
@@ -1660,6 +1673,7 @@ ${items.join("\n")}
     // A dated shared episode with a STABLE URL (the R2 key hash changes per
     // script, so the feed points here). Range-capable — podcast apps seek.
     if (url.pathname === "/api/podcast/episode") {
+      if (audioPaused(env)) return json({ error: "audio paused", paused: true }, 503);
       if (!env.WIRE_KV || !env.WIRE_AUDIO) return json({ error: "not configured" }, 404);
       const d = String(url.searchParams.get("d") || "");
       if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return json({ error: "bad date" }, 400);
@@ -1700,7 +1714,7 @@ ${items.join("\n")}
     // ---- Sign in with Apple endpoints (no-ops unless configured) ----------
     if (url.pathname === "/api/me") {
       const s = await verifyToken(env, getCookie(request, "sess"));
-      return json({ appleEnabled: appleEnabled(env), signedIn: !!s, email: (s && s.email) || null, name: (s && s.name) || null });
+      return json({ appleEnabled: appleEnabled(env), signedIn: !!s, email: (s && s.email) || null, name: (s && s.name) || null, audioPaused: audioPaused(env) });
     }
     if (url.pathname === "/api/profile" && request.method === "GET") {
       // Access is bound to the caller's identity: a signed-in session reads only
@@ -1812,6 +1826,7 @@ ${items.join("\n")}
     // no web search — so signed-in + throttled like desk-preview. The client
     // speaks it with browser TTS (deadpan is the joke) and plays local files.
     if (url.pathname === "/api/dj" && request.method === "POST") {
+      if (audioPaused(env)) return json({ error: "Wire FM is off air while the audio budget refills — the overlord is furious. Back soon.", paused: true }, 503);
       if (!sUid) return json({ error: "Sign in with Apple to go on air." }, 401);
       try {
         if (env.WIRE_KV) {
@@ -1838,19 +1853,33 @@ ${items.join("\n")}
         // Pick the caller's newsroom. The personal feed key can hold a zero-item
         // payload (failed/quiet build) or yesterday's edition mid-rebuild; only
         // falling back on a MISSING key left the DJ scripting a "quiet news day"
-        // the app itself wasn't showing (#34). Swap to the shared wire whenever
-        // it is a strict improvement: it has stories and is at least as fresh.
+        // the app itself wasn't showing (#34). Swap to the shared wire when it
+        // improves on that: any stories beat none, else it must be strictly fresher.
         const t = await resolveTarget(env, headerUid, !!sUid);
         const hasNews = f => !!(f && Array.isArray(f.items) && f.items.length);
-        let feed = await readJSON(env, t.writeKeys.latest);
-        let feedSource = t.key === "shared" ? "shared" : "personal";
-        if (t.key !== "shared" && (!hasNews(feed) || feed.date !== londonDate())) {
+        let feed = t.key !== "shared" ? await readJSON(env, t.writeKeys.latest) : null;
+        let source = feed ? "personal" : "shared";
+        if (t.key === "shared") { feed = await readJSON(env, SHARED_KEY); }
+        else if (!hasNews(feed) || feed.date !== londonDate()) {
           const shared = await readJSON(env, SHARED_KEY);
-          if (hasNews(shared) && (!hasNews(feed) || shared.date === londonDate())) { feed = shared; feedSource = "shared"; }
+          // Any stories beat none; a personal feed that HAS stories only yields
+          // to a strictly fresher shared one (ISO dates compare lexicographically).
+          if (hasNews(shared) && (!hasNews(feed) || String(shared.date || "") > String(feed.date || ""))) { feed = shared; source = "shared"; }
         }
-        const news = (hasNews(feed) ? feed.items : []).slice(0, 6).map(i => `- ${i.title}: ${i.summary}`).join("\n");
+        const labelOf = id => { const d = ((feed && feed.desks) || []).find(x => x.id === id); return (d && d.label) || id; };
+        // Sweep the reader's DESKS — one top story per desk (salience-first),
+        // round-robin up to 8 — instead of whatever six items merged newest,
+        // which could cluster on two desks and read as "not my news".
+        const byDesk = {};
+        for (const it of ((feed && feed.items) || [])) (byDesk[it.category] = byDesk[it.category] || []).push(it);
+        for (const c of Object.keys(byDesk)) byDesk[c].sort((a, b) => (b.salience || 3) - (a.salience || 3));
+        const picks = [];
+        for (let round = 0; picks.length < 8 && round < 3; round++) {
+          for (const c of Object.keys(byDesk)) { const it = byDesk[c][round]; if (it && picks.length < 8) picks.push(it); }
+        }
+        const news = picks.map(i => `- [${labelOf(i.category)}] ${i.title}: ${i.summary}`).join("\n");
         const prompt = `You produce "Wire FM", the after-hours radio mode of a personal news app. Write a short running order for a SARCASTIC, self-aware AI radio DJ. Personality: ${sass}. Sharp and genuinely funny, never cruel: no jabs at identity or looks, no slurs, mild language at most; under the attitude the host is secretly fond of the listener. ${ukRule} House style: no em or en dashes (every line is spoken aloud). Do NOT use web search.
-TODAY'S REAL HEADLINES (never invent news; riff on these only):
+TODAY'S REAL HEADLINES from the listener's own desks, tagged [Desk] (never invent news; riff on these only, and NAME the desk naturally when you introduce its story, e.g. "your Cardiff desk reckons..."):
 ${news || "- (a suspiciously quiet news day: complain about it at length)"}
 LISTENER'S QUEUE (use each once, in order): ${tracks.map((x, i) => `${i + 1}. "${x}"`).join(" ")}
 Shape: cold open (greeting, time-of-day feel, a tease or a complaint) then news with editorial snark, then intro + back-announce each track with attitude, 1-2 talk breaks between; spoken lines tight, radio moves fast.
@@ -1866,7 +1895,7 @@ Return ONLY JSON: {"segments":[{"type":"talk","text":"..."},{"type":"news","text
           intro: s.intro ? deDash(String(s.intro)).slice(0, 400) : "",
           outro: s.outro ? deDash(String(s.outro)).slice(0, 400) : "",
         })).filter(s => s.text || s.type === "music");
-        return json({ segments, feedSource, feedDate: (feed && feed.date) || null });
+        return json({ segments, newsroom: { source, desks: [...new Set(picks.map(i => labelOf(i.category)))], items: picks.length } });
       } catch (e) { return json({ error: "dj failed" }, 500); }
     }
 
@@ -1875,6 +1904,7 @@ Return ONLY JSON: {"segments":[{"type":"talk","text":"..."},{"type":"news","text
     // an unauth caller can't burn credits on arbitrary text (text comes from the
     // feed). GET /api/listen/<itemId> — the client passes its uid via x-user-id.
     if (url.pathname.startsWith("/api/listen/") && request.method === "GET") {
+      if (audioPaused(env)) return json({ error: "audio paused", paused: true }, 503);
       if (!env.ELEVENLABS_API_KEY || !env.WIRE_AUDIO) return json({ error: "audio not configured" }, 404);
       try {
         const itemId = decodeURIComponent(url.pathname.slice("/api/listen/".length));
@@ -1903,6 +1933,7 @@ Return ONLY JSON: {"segments":[{"type":"talk","text":"..."},{"type":"news","text
     // A personalised listener gets THEIR episode, falling back to the shared one if
     // their build hasn't produced a script yet. ?meta=1 returns readiness JSON.
     if (url.pathname === "/api/podcast/today" && request.method === "GET") {
+      if (audioPaused(env)) return url.searchParams.get("meta") === "1" ? json({ ready: false, paused: true }) : json({ error: "audio paused", paused: true }, 503);
       if (!env.ELEVENLABS_API_KEY || !env.WIRE_AUDIO) return json({ error: "audio not configured" }, 404);
       try {
         const t = await resolveTarget(env, headerUid, !!sUid);
@@ -2047,13 +2078,14 @@ Return ONLY JSON: {"segments":[{"type":"talk","text":"..."},{"type":"news","text
           target = { latest: userBriefKey(uid), snapshot: `${userBriefKey(uid)}:${londonDate()}`, desks: deskList(profile) };
         }
         const out = await ingestBriefing(env, body, target);
-        // Warm the podcast cache now (shared AND personalised feeds) so it's ready
-        // before anyone taps play. Render AWAITED here (not ctx.waitUntil, whose
-        // ~30s post-response budget would kill the ~40s render before it caches) —
-        // the routine POST can absorb the latency. This is the reliable render
-        // path; the cold GET below is only a fallback. Without the personalised
-        // prewarm, every signed-in reader's first play ate the full cold render.
-        if (Array.isArray(out.podcast) && out.podcast.length && env.ELEVENLABS_API_KEY && env.WIRE_AUDIO) {
+        // Podcast prewarm — OFF by default since 2026-07-07 (minimum-spend mode):
+        // episodes render LAZILY on first play instead (the cold GET fallback
+        // below, ~40s once per episode behind a lock), so editions nobody plays
+        // cost nothing. Set PODCAST_PREWARM = "on" to restore eager rendering
+        // (render AWAITED, not ctx.waitUntil — the routine POST absorbs the
+        // latency; waitUntil's ~30s budget would kill the ~40s render).
+        const prewarmOn = String(env.PODCAST_PREWARM || "off").toLowerCase() === "on";
+        if (prewarmOn && Array.isArray(out.podcast) && out.podcast.length && env.ELEVENLABS_API_KEY && env.WIRE_AUDIO) {
           try { await ensurePodcastRendered(env, out.podcast, out.date); } catch (_) {}
         }
         return json({ ok: true, date: out.date, slot: out.slot, accepted: out.items.length, target: uid ? `user:${uid}` : "shared", report: out.report });

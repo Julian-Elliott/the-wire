@@ -188,7 +188,7 @@ a{ color:inherit; text-decoration:none; }
 .why-i{ display:inline-flex; align-items:center; justify-content:center; min-width:17px; height:18px; border-radius:9px; border:1px solid var(--line); background:transparent; color:var(--faint); font-family:'JetBrains Mono',monospace; font-size:9.5px; font-style:italic; cursor:pointer; user-select:none; padding:0 8px; position:relative; }
 .why-i::after, .listen::after, .rtip-x::after{ content:""; position:absolute; inset:-11px; }   /* 44px-ish hit slop on daily-use controls */
 .why-i:hover, .why-i[aria-expanded="true"]{ color:var(--amber); border-color:var(--amber); }
-.why-pop{ margin:2px 0 10px; font-size:12.5px; line-height:1.45; color:var(--muted); border-top:1px dashed var(--line); padding-top:8px; }
+.why-pop{ margin:2px 0 2px; font-size:12.5px; line-height:1.45; color:var(--muted); border-top:1px dashed var(--line); padding-top:7px; }
 .why-pop[hidden]{ display:none; }
 .why-pop b{ font-family:'JetBrains Mono',monospace; font-size:9px; letter-spacing:.16em; text-transform:uppercase; color:var(--amber); margin-right:7px; font-weight:600; }
 .card-foot{ display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
@@ -482,6 +482,7 @@ async function putProfile(regenerate){
 async function fetchMe(){
   try{ const r = await fetch("/api/me"); const d = await r.json();
     state.auth = { enabled: !!d.appleEnabled, signedIn: !!d.signedIn, email: d.email||null, name: d.name||null };
+    state.paused = !!d.audioPaused;
   }catch(_){}
 }
 // Convert the server's profile shape ({desks:{enabled,custom}}) to the client's
@@ -641,6 +642,8 @@ const FM_SASS = [
   { id:"savage", label:"Savage" }, { id:"unhinged", label:"Unhinged" },
 ];
 const fmOn = ()=>{ try{ return localStorage.getItem("jackwire:fm")==="1"; }catch(_){ return false; } };
+// #40: the why footer is always-or-never (settings toggle), no per-card button.
+const whyOn = ()=>{ try{ return localStorage.getItem("jackwire:why")!=="0"; }catch(_){ return true; } };
 const fmState = { open:false, tracks:[], status:"idle", segs:[], idx:-1, audio:null, cancel:false, skip:0, fold:{},
   line:"Off air. Press GO LIVE and let's get this over with.",
   sass:(()=>{ try{ const n=Number(localStorage.getItem("jackwire:fmsass")); return n>=0&&n<4?n:2; }catch(_){ return 2; } })() };
@@ -773,7 +776,7 @@ function fmFallback(){
 }
 async function fmGoLive(){
   if(!fmState.tracks.length){ fmState.line="Add a track or two first. I'm not doing this a cappella."; render(); return; }
-  fmState.cancel=false; fmState.err=null; fmState.status="loading"; fmState.feedSrc=null;
+  fmState.cancel=false; fmState.err=null; fmState.status="loading";
   fmState.line="Judging your playlist and shaking down the newsroom…"; render();
   cancelPodWait(); if(_pod){ try{ _pod.pause(); }catch(_){} } if(_audio){ try{ _audio.pause(); }catch(_){} }
   let segs=null;
@@ -781,7 +784,15 @@ async function fmGoLive(){
     const r = await fetch("/api/dj", { method:"POST", headers:{"content-type":"application/json"},
       body: JSON.stringify({ tracks: fmState.tracks.map(t=>t.title), sass: FM_SASS[fmState.sass].id }) });
     const d = await r.json();
-    if(d && Array.isArray(d.segments) && d.segments.length){ segs=d.segments; fmState.feedSrc=d.feedSource||null; }
+    if(d && Array.isArray(d.segments) && d.segments.length){
+      segs=d.segments;
+      if(d.newsroom && d.newsroom.source==="personal"){
+        fmState.line = "On air with your desks: "+(d.newsroom.desks||[]).slice(0,5).join(", ")+((d.newsroom.desks||[]).length>5?"…":"");
+      } else if(d.newsroom){
+        state.toast={msg:"Your personal feed wasn't available — the host is reading the shared desk."};
+        clearTimeout(window.__tt); window.__tt=setTimeout(()=>{state.toast=null;render();},6000);
+      }
+    }
     else if(d && d.error){ state.toast={msg:d.error+" — running the demo show instead."};
       clearTimeout(window.__tt); window.__tt=setTimeout(()=>{state.toast=null;render();},6000); }
   }catch(_){ state.toast={msg:"Couldn't reach the newsroom — running the demo show instead."};
@@ -1109,12 +1120,11 @@ function render(){
         <div class="sw nope">◂ Not for me</div>
         <div class="card-top">
           <span class="cat" style="color:${ac}">${esc(info.label)}</span>
-          ${it.why?`<button class="why-i" type="button" aria-expanded="false" aria-label="Why it matters">why</button>`:""}
           ${isNew(it)?`<span class="new-pill">NEW</span>`:""}
           <span class="card-meta">
             ${it.changePct?`<span class="move" style="color:${dirCol}">${arrow} ${esc(it.changePct)}</span>`:""}
             <span class="src card-src">${esc(it.source || domainOf(it.url) || "—")}${it.addedAt?` · ${relAge(it.addedAt)}`:""}</span>
-            <button class="listen" data-listen="${esc(it.id)}" type="button" aria-label="Listen to this">▶</button>
+            ${state.paused?"":`<button class="listen" data-listen="${esc(it.id)}" type="button" aria-label="Listen to this">▶</button>`}
           </span>
         </div>
         ${it.img?`<div class="card-body">
@@ -1122,7 +1132,7 @@ function render(){
           <div class="card-txt"><h3 class="h">${titleHtml}</h3>${it.summary?`<p class="p">${esc(it.summary)}</p>`:""}</div>
         </div>`:`<h3 class="h">${titleHtml}</h3>
         ${it.summary?`<p class="p">${esc(it.summary)}</p>`:""}`}
-        ${it.why?`<div class="why-pop" hidden><b>Why it matters</b>${esc(it.why)}</div>`:""}
+        ${(it.why && whyOn())?`<div class="why-pop">${esc(it.why)}</div>`:""}
       </article>`;
     }).join("");
 
@@ -1166,12 +1176,12 @@ function render(){
         ${mutedTypes().map(t=>`<button class="chip muted" data-restore="${esc(t)}">${esc(t)} ✕</button>`).join("")}
       </div></div></div>
       <div class="set-row"><span class="set-label">Podcast</span><div class="set-body">
-        <div class="hint">Pick the show's style — tap ▶ for a taster. Your next episode is produced in that register.</div>
+        ${state.paused?`<div class="hint" style="color:var(--amber)">Paused — voice budget spent for the month. Your style choice is saved and applies when episodes return.</div>`:`<div class="hint">Pick the show's style — tap ▶ for a taster. Your next episode is produced in that register.</div>`}
         ${Object.entries(SHOWS).map(([id,s])=>{
           const cur = state.profile.show || "briefing";
           return `<div class="row" style="align-items:center;gap:8px;margin-top:7px">
             <button class="chip ${cur===id?"":"off"}" data-show="${id}">${cur===id?"✓ ":""}${s.label}</button>
-            <button class="listen" data-preview="${id}" type="button" aria-label="Preview ${s.label}">▶</button>
+            ${state.paused?"":`<button class="listen" data-preview="${id}" type="button" aria-label="Preview ${s.label}">▶</button>`}
             <span class="hint" style="margin:0">${s.desc}</span>
           </div>`;
         }).join("")}
@@ -1185,10 +1195,14 @@ function render(){
               .map(([v,l])=>`<option value="${v}" ${(state.profile.window||"")===v?"selected":""}>${l}</option>`).join("")}
           </select>
         </div>
+        <div class="row" style="margin-top:8px;align-items:center;gap:8px">
+          <span class="hint" style="margin:0">“Why it matters” under stories</span>
+          <button class="linkbtn" id="whytoggle">${whyOn()?"Always":"Never"}</button>
+        </div>
         <div class="row" style="margin-top:8px"><button class="linkbtn" id="reset-learn">Reset what I’ve learned</button></div>
       </div></div>
       <div class="set-row"><span class="set-label">Wire FM</span><div class="set-body">
-        <div class="hint">An after-hours radio mode: your own tracks, today's real headlines, an AI host with attitude. Experimental — off by default.</div>
+        <div class="hint">An after-hours radio mode: your own tracks, today's real headlines, an AI host with attitude. Experimental — off by default.${state.paused?' <span style="color:var(--amber)">Currently off air (voice budget) — back soon.</span>':''}</div>
         <div class="row" style="margin-top:8px"><button class="linkbtn" id="fmtoggle">${fmOn()?"Turn off":"Turn on"}</button></div>
       </div></div>
       ${state.auth.enabled ? `<div class="set-row"><span class="set-label">Account</span><div class="set-body">
@@ -1228,27 +1242,27 @@ function render(){
     <div class="settings" id="fmpanel">
       <div class="set-row"><span class="set-label" style="color:${fmState.status==="live"?"var(--red)":"var(--muted)"}">${fmState.status==="live"?"● ON AIR":"WIRE FM"}</span><div class="set-body">
         <div class="hint" id="fmtype" style="letter-spacing:.14em;text-transform:uppercase;font-family:'JetBrains Mono',monospace">${fmState.status==="live"?"ON AIR":"STANDBY"}</div>
-        <p id="fmline" style="margin:6px 0 0;font-size:14.5px;line-height:1.5">${esc(fmState.line)}</p>
+        <p id="fmline" style="margin:6px 0 0;font-size:14.5px;line-height:1.5">${state.paused?"OFF AIR — the voice budget is spent and the overlord is furious about the interruption. Back soon.":esc(fmState.line)}</p>
       </div></div>
-      <div class="set-row"><span class="set-label" data-fmfold="tracks" role="button" aria-expanded="${!fmState.fold.tracks}" style="cursor:pointer">Tracks ${fmState.fold.tracks?"▸":"▾"}</span><div class="set-body">
+      <div class="set-row"><span class="set-label" data-fmfold="tracks" role="button" tabindex="0" aria-expanded="${!fmState.fold.tracks}" style="cursor:pointer">Tracks ${fmState.fold.tracks?"▸":"▾"}</span><div class="set-body">
         ${fmState.fold.tracks?`<div class="hint" data-fmfold="tracks" style="cursor:pointer;margin:0">${fmState.tracks.length} track${fmState.tracks.length===1?"":"s"}${fmState.amPlaylist?" · Apple Music":""} — tap to expand</div>`:`
         ${fmState.tracks.map((t,i)=>`<div class="row" style="justify-content:space-between;margin-top:4px"><span style="font-size:13px">${esc(t.title)}</span><button class="desk-rm" data-fmrm="${i}">✕</button></div>`).join("")||`<div class="set-empty">Add a few audio files — they never leave your device.</div>`}
         <div class="row" style="margin-top:8px"><button class="linkbtn" id="fmadd">＋ Add files</button><button class="linkbtn" id="fmam">${fmState.playlists?"↻ Reconnect Apple Music":" Connect Apple Music"}</button><input id="fmfiles" type="file" accept="audio/*" multiple style="display:none"></div>
         ${fmState.playlists && fmState.playlists.length ? `<div class="row" style="margin-top:8px;align-items:center;gap:7px"><span class="hint" style="margin:0">Playlist</span><select class="mini-sel" id="fmpl"><option value="">choose…</option>${fmState.playlists.map(p=>`<option value="${esc(p.id)}" ${fmState.amPlaylist===p.id?"selected":""}>${esc(p.name)}</option>`).join("")}</select></div>`:""}`}
       </div></div>
-      <div class="set-row"><span class="set-label" data-fmfold="sass" role="button" aria-expanded="${!fmState.fold.sass}" style="cursor:pointer">Attitude ${fmState.fold.sass?"▸":"▾"}</span><div class="set-body">
+      <div class="set-row"><span class="set-label" data-fmfold="sass" role="button" tabindex="0" aria-expanded="${!fmState.fold.sass}" style="cursor:pointer">Attitude ${fmState.fold.sass?"▸":"▾"}</span><div class="set-body">
         ${fmState.fold.sass?`<div class="hint" data-fmfold="sass" style="cursor:pointer;margin:0">${FM_SASS[fmState.sass].label} — tap to change</div>`:`<div class="chips">
         ${FM_SASS.map((sx,i)=>`<button class="chip ${i===fmState.sass?"":"off"}" data-fmsass="${i}">${i===fmState.sass?"✓ ":""}${sx.label}</button>`).join("")}
       </div>`}
       </div></div>
-      ${fmState.segs.length?`<div class="set-row"><span class="set-label" data-fmfold="order" role="button" aria-expanded="${!fmState.fold.order}" style="cursor:pointer">Running order ${fmState.fold.order?"▸":"▾"}</span><div class="set-body" id="fmorder">
+      ${fmState.segs.length?`<div class="set-row"><span class="set-label" data-fmfold="order" role="button" tabindex="0" aria-expanded="${!fmState.fold.order}" style="cursor:pointer">Running order ${fmState.fold.order?"▸":"▾"}</span><div class="set-body" id="fmorder">
         ${fmState.fold.order?`<div class="hint" data-fmfold="order" style="cursor:pointer;margin:0">${fmState.segs.length} segments — tap to expand</div>`:fmState.segs.map((sg,i)=>`<div class="hint fm-row${i===fmState.idx?" fm-on":""}" style="margin-top:3px">${sg.type==="music"?"♪":sg.type==="news"?"◆":"❯"} ${esc(sg.type==="music"?((fmState.tracks[(sg.track||1)-1]||{}).title||"track"):(sg.text||"").slice(0,70))}</div>`).join("")}
       </div></div>`:""}
       <div class="set-row"><span class="set-label"></span><div class="set-body">
-        ${fmState.status==="live"?`<div class="row" style="gap:8px;align-items:center"><button class="icbtn" id="fmprev" aria-label="Previous track" title="Previous track">⏮</button><button class="refresh" id="fmstop" style="background:var(--down);color:#fff">■ Stop</button><button class="icbtn" id="fmnext" aria-label="Next track" title="Next track">⏭</button></div>`
+        ${state.paused?`<button class="refresh" disabled style="opacity:.5;cursor:default">OFF AIR</button>`
+          :fmState.status==="live"?`<div class="row" style="gap:8px;align-items:center"><button class="icbtn" id="fmprev" aria-label="Previous track" title="Previous track">⏮</button><button class="refresh" id="fmstop" style="background:var(--down);color:#fff">■ Stop</button><button class="icbtn" id="fmnext" aria-label="Next track" title="Next track">⏭</button></div>`
           :`<button class="refresh" id="fmgo" ${fmState.status==="loading"?"disabled":""}>${fmState.status==="loading"?"Tuning in…":"▶ Go live"}</button>`}
         <div class="hint" style="margin-top:7px">Your files + today's real headlines, hosted by an AI with attitude. The voice is your browser's TTS — deadpan is the joke.</div>
-        ${fmState.feedSrc?`<div class="hint" style="margin-top:4px">Headlines this show: ${fmState.feedSrc==="personal"?"your personalised desks":"the shared wire — your desks hadn't filed a fresh edition, so the host grabbed the newsroom copy"}.</div>`:""}
       </div></div>
     </div>` : "";
   app.innerHTML = `
@@ -1265,7 +1279,13 @@ function render(){
     ${settingsHtml}${fmHtml}
     ${(sumLine || nNew) ? `<section class="hero"><p class="sum">${esc(sumLine)}${nNew?`${sumLine?" · ":""}<span style="color:var(--amber)">${nNew} new</span>`:""}</p></section>` : ""}
     <nav class="filters"><div class="filters-inner">${filterBtns}</div></nav>
-    <section class="podcast" id="podbar">
+    ${state.paused?`<section class="podcast" style="opacity:.75">
+      <div class="pod-main">
+        <button class="pod-play" disabled style="opacity:.45;cursor:default">▶</button>
+        <div class="pod-meta"><div class="pod-title">The podcast is on a tea break</div>
+        <div class="pod-sub">This month's voice budget is spent — episodes and read-outs will be back shortly.</div></div>
+      </div>
+    </section>`:`<section class="podcast" id="podbar">
       <div class="pod-main">
       <button class="pod-play" id="podplay" type="button" aria-label="Play today's podcast">▶</button>
       <div class="pod-meta"><div class="pod-title">The latest on The Wire</div><div class="pod-sub" id="podsub">The day's news, talked through</div></div>
@@ -1286,7 +1306,7 @@ function render(){
         <span class="pod-time" id="poddur">–:––</span>
         <button class="pod-ctl" id="podrate" type="button" aria-label="Playback speed" style="width:auto;border-radius:999px;padding:0 11px;font-family:'JetBrains Mono',monospace;font-size:11px">${(window.__podRate||1)}×</button>
       </div>
-    </section>
+    </section>`}
     ${(()=>{ let seen=true; try{ seen=!!localStorage.getItem("jackwire:readertip"); }catch(_){};
       const ua=navigator.userAgent, safari=/safari/i.test(ua) && !/chrome|crios|fxios|edg|android/i.test(ua);
       return (seen||!safari)?"":`<div class="rtip" id="rtip"><div>Tip: open a headline, tap <b>aA</b> → <b>Use Reader Automatically</b>. Clean reading — one and done.</div><button class="rtip-x" id="rtip-x" aria-label="Dismiss">✕</button></div>`; })()}
@@ -1530,7 +1550,12 @@ function wire(){
   $("fmstop") && ($("fmstop").onclick = fmStop);
   $("fmprev") && ($("fmprev").onclick = ()=> fmSkip(-1));
   $("fmnext") && ($("fmnext").onclick = ()=> fmSkip(1));
-  document.querySelectorAll("[data-fmfold]").forEach(el=> el.onclick=()=>{ const k=el.dataset.fmfold; fmState.fold[k]=!fmState.fold[k]; render(); });
+  document.querySelectorAll("[data-fmfold]").forEach(el=>{
+    const flip=()=>{ const k=el.dataset.fmfold; fmState.fold[k]=!fmState.fold[k]; render(); };
+    el.onclick=flip;
+    // role="button" spans need real key handling for keyboard users.
+    el.onkeydown=e=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); flip(); } };
+  });
 
   document.querySelectorAll("[data-filter]").forEach(b=> b.onclick = ()=>{ state.filter=b.dataset.filter; render(); });
   // Drag-to-reorder filter pills (desktop; touch uses the ▲▼ in Settings).
@@ -1551,13 +1576,6 @@ function wire(){
   document.querySelectorAll("[data-preview]").forEach(b=> b.onclick = (e)=>{ e.stopPropagation(); playPreview(b.dataset.preview); });
   document.querySelectorAll("[data-up]").forEach(b=> b.onclick = ()=> moveDesk(b.dataset.up, -1));
   document.querySelectorAll("[data-down]").forEach(b=> b.onclick = ()=> moveDesk(b.dataset.down, 1));
-  document.querySelectorAll(".why-i").forEach(b=> b.onclick = (e)=>{
-    e.stopPropagation();
-    const card = b.closest(".card"); const pop = card && card.querySelector(".why-pop"); if(!pop) return;
-    const open = pop.hasAttribute("hidden");
-    if(open) pop.removeAttribute("hidden"); else pop.setAttribute("hidden","");
-    b.setAttribute("aria-expanded", open ? "true" : "false");
-  });
   document.querySelectorAll(".listen[data-listen]").forEach(b=> b.onclick = (e)=>{ e.stopPropagation(); toggleListen(b.getAttribute("data-listen")); });   // [data-listen] only — the style-taster ▶s share the class but bind to playPreview
   syncListenUI();
   const rtipX=document.getElementById("rtip-x");
@@ -1600,6 +1618,7 @@ function wire(){
     saveRead(); render();
   });
   $("show-earlier") && ($("show-earlier").onclick = ()=>{ state.showEarlier = true; render(); });
+  $("whytoggle") && ($("whytoggle").onclick = ()=>{ try{ localStorage.setItem("jackwire:why", whyOn()?"0":"1"); }catch(_){} render(); });
 
   // Record "seen" only when a card DWELLS on screen (~1.2s at 60% visible) —
   // fast scrolling isn't reading, and a skim-then-reload must not hide the
