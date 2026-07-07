@@ -32,6 +32,10 @@ export interface StoredStory {
   quote: string | null;
   editorial_read: string | null;
   added_at: string;
+  // uid-scoped story (a per-user trigger, e.g. "planning app near YOUR
+  // home"); null/absent = visible to everyone. Scoped stories never enter
+  // the anonymous feed — one user's local story must not leak their area.
+  audience?: string | null;
 }
 
 const DDL = `
@@ -51,7 +55,8 @@ const DDL = `
     published_at   TEXT,
     quote          TEXT,
     editorial_read TEXT,
-    added_at       TEXT NOT NULL
+    added_at       TEXT NOT NULL,
+    audience       TEXT
   );
   CREATE INDEX IF NOT EXISTS idx_stories_added ON stories(added_at);
   CREATE INDEX IF NOT EXISTS idx_stories_desk  ON stories(desk);
@@ -114,6 +119,9 @@ export class NewsroomDO extends DurableObject<Env> {
       if (!cols2.includes("embedding")) {
         ctx.storage.sql.exec("ALTER TABLE stories ADD COLUMN embedding BLOB");
       }
+      if (!cols2.includes("audience")) {
+        ctx.storage.sql.exec("ALTER TABLE stories ADD COLUMN audience TEXT");
+      }
     });
   }
 
@@ -132,7 +140,14 @@ export class NewsroomDO extends DurableObject<Env> {
 
     for (const r of rows) {
       const vec = r.embedding ?? null;
-      const verdict = clusterCandidate({ desk: r.desk, title: r.title, vec }, recent);
+      // Audience-scoped stories are per-user BY CONSTRUCTION (uid-salted
+      // dedup keys): clustering them against the global window would let
+      // one user's near-identical local story swallow another's, so they
+      // skip the cluster gates and stay out of the recent window.
+      const scoped = !!r.audience;
+      const verdict = scoped
+        ? ({ kind: "insert" } as const)
+        : clusterCandidate({ desk: r.desk, title: r.title, vec }, recent);
       if (verdict.kind === "duplicate") {
         clusterDups++;
         continue;
@@ -143,22 +158,24 @@ export class NewsroomDO extends DurableObject<Env> {
       const res = this.ctx.storage.sql.exec(
         `INSERT OR IGNORE INTO stories
            (story_id, saga_id, desk, title, summary, why, url, canon_url, title_key, sources,
-            salience, priority, published_at, quote, editorial_read, added_at, embedding)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+            salience, priority, published_at, quote, editorial_read, added_at, embedding, audience)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
         r.story_id, sagaId, r.desk, r.title, r.summary, r.why, r.url, r.canon_url, r.title_key,
         JSON.stringify(r.sources ?? []), r.salience, r.priority, r.published_at,
-        r.quote, r.editorial_read, r.added_at, vec ? vecToBlob(vec) : null,
+        r.quote, r.editorial_read, r.added_at, vec ? vecToBlob(vec) : null, r.audience ?? null,
       );
       if (res.rowsWritten > 0) {
         inserted++;
         // Batch-internal chaining: later items in this batch must see this one.
-        recent.push({
-          story_id: r.story_id,
-          saga_id: sagaId,
-          desk: r.desk,
-          title: r.title,
-          vec,
-        });
+        if (!scoped) {
+          recent.push({
+            story_id: r.story_id,
+            saga_id: sagaId,
+            desk: r.desk,
+            title: r.title,
+            vec,
+          });
+        }
       }
     }
     this.logStatus(
@@ -173,7 +190,7 @@ export class NewsroomDO extends DurableObject<Env> {
     const cutoff = new Date(Date.now() - CLUSTER_WINDOW_HOURS * 3_600_000).toISOString();
     return this.ctx.storage.sql
       .exec<{ story_id: string; saga_id: string | null; desk: string; title: string; embedding: ArrayBuffer | null }>(
-        "SELECT story_id, saga_id, desk, title, embedding FROM stories WHERE added_at >= ?",
+        "SELECT story_id, saga_id, desk, title, embedding FROM stories WHERE added_at >= ? AND audience IS NULL",
         cutoff,
       )
       .toArray()
@@ -192,7 +209,7 @@ export class NewsroomDO extends DurableObject<Env> {
     const cutoff = new Date(Date.now() - days * 86400_000).toISOString();
     const rows = this.ctx.storage.sql
       .exec<{ canon_url: string; title_key: string; desk: string }>(
-        "SELECT canon_url, title_key, desk FROM stories WHERE added_at >= ?",
+        "SELECT canon_url, title_key, desk FROM stories WHERE added_at >= ? AND audience IS NULL",
         cutoff,
       )
       .toArray();
@@ -204,7 +221,12 @@ export class NewsroomDO extends DurableObject<Env> {
     return keys;
   }
 
-  async feed(limit = 50): Promise<(Omit<StoredStory, "embedding"> & { saga_id: string | null })[]> {
+  // Anonymous callers (uid null) see only global stories; a signed-in uid
+  // additionally sees stories scoped to THEM. Never anyone else's.
+  async feed(
+    limit = 50,
+    uid: string | null = null,
+  ): Promise<(Omit<StoredStory, "embedding"> & { saga_id: string | null })[]> {
     type Row = Omit<StoredStory, "sources" | "embedding"> & {
       sources: string;
       saga_id: string | null;
@@ -212,7 +234,8 @@ export class NewsroomDO extends DurableObject<Env> {
     };
     const rows = this.ctx.storage.sql
       .exec<Row>(
-        "SELECT * FROM stories ORDER BY added_at DESC LIMIT ?",
+        "SELECT * FROM stories WHERE audience IS NULL OR audience = ? ORDER BY added_at DESC LIMIT ?",
+        uid ?? "",
         Math.min(Math.max(1, limit), 200),
       )
       .toArray();
