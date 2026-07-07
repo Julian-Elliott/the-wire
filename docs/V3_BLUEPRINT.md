@@ -76,6 +76,12 @@ The deliberate absences matter as much as the presences: no Queues, no Workflows
 
 ## 3. Content pipeline and the reuse economics, spelled out
 
+**There is no general edition — every article a reader sees is personalised.** This is a deliberate break from v2, which was a two-tier product: a shared briefing (`briefing:latest` — the six built-in desks, one copy in KV, a shared podcast and the public `/feed.xml`) served to anonymous visitors and used as the fallback for signed-in readers whose personal feed hadn't built yet, plus optional per-user builds on top. v3 drops the shared tier entirely.
+
+A `story` is a shared *fact object*, never a deliverable: nothing reaches a reader except through their own L4 assembly (their desk weights, trait affinities, `read_ledger`, saga recall), rendered at the pitch and tone their Persona selects, and delivered through their own interruption gate.
+
+Where the tables below say a layer is "shared" or "global", that means reuse *below* the reader — facts (L1), desk angles (L2) and cell renders (L3) are shared across users who happen to occupy the same cell, purely as a cost mechanism. There is no cell every user gets by default, no general desk, and no anonymous shared feed; even the signals desks (weather, energy, planning) produce triggers scored against each user's profile, not a common bulletin. The only `shared` identifier that survives into v3 is the one-off migration import of v2's `seen:shared` ledger (§11).
+
 The pipeline is five layers; the money question is which layer the tokens live in.
 
 | Layer | Produces | Shareable? | Cache key |
