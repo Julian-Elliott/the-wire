@@ -59,7 +59,10 @@ export async function pollCarbon(fetcher: Fetcher): Promise<PollerResult> {
     triggers.push({
       source: "carbon",
       desk: "energy",
-      dedupKey: `energy:carbon:${new Date().toISOString().slice(0, 13)}`,
+      // STATE, not event: an all-night green grid is ONE fact per day, not
+      // one story per hour (first-edition lesson — hour-bucketing spammed
+      // five identical cards).
+      dedupKey: `energy:carbon:${new Date().toISOString().slice(0, 10)}`,
       title: "The grid is green right now",
       summary: `Carbon intensity is ${cur.index} (${cur.actual ?? cur.forecast} gCO₂/kWh) — a good moment for the wash or the car.`,
       why: `grid carbon intensity is ${cur.index}`,

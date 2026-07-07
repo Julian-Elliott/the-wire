@@ -251,6 +251,19 @@ export class NewsroomDO extends DurableObject<Env> {
     return { key, rows: lines.length };
   }
 
+  // Operator purge (RUNBOOK): remove specific stories by id — the recovery
+  // tool for trigger spam or a bad batch. Content-addressed ids make this
+  // precise; the read_ledger is untouched (seen keys still suppress repeats).
+  async deleteStories(ids: string[]): Promise<{ deleted: number }> {
+    let deleted = 0;
+    for (const id of ids.slice(0, 100)) {
+      const res = this.ctx.storage.sql.exec("DELETE FROM stories WHERE story_id = ?", String(id));
+      deleted += res.rowsWritten > 0 ? 1 : 0;
+    }
+    this.logStatus("purge", "ok", `deleted=${deleted}`);
+    return { deleted };
+  }
+
   logStatus(step: string, status: string, detail?: string): void {
     this.ctx.storage.sql.exec(
       "INSERT INTO build_status (step, status, detail, at) VALUES (?,?,?,?)",

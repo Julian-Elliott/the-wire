@@ -935,6 +935,26 @@ app.post("/api/admin/sweep", async (c) => {
   return c.json({ ok: result.failures.length === 0, ...result });
 });
 
+// Operator purge of specific stories (trigger spam / bad batch recovery).
+app.post("/api/admin/purge-stories", async (c) => {
+  const gate = await machineGate(c);
+  if (gate) return gate;
+  const bodyText = await readBodyBounded(c.req.raw, 32 * 1024);
+  if (bodyText === null) return c.json({ ok: false }, 413);
+  let p: { ids?: string[] };
+  try {
+    p = JSON.parse(bodyText);
+  } catch {
+    return c.json({ ok: false, error: "invalid JSON" }, 400);
+  }
+  if (!Array.isArray(p.ids) || !p.ids.length) return c.json({ ok: false, error: "no ids" }, 400);
+  const stub = c.env.NEWSROOM.get(c.env.NEWSROOM.idFromName("main")) as unknown as {
+    deleteStories(ids: string[]): Promise<{ deleted: number }>;
+  };
+  const res = await stub.deleteStories(p.ids.map(String));
+  return c.json({ ok: true, ...res });
+});
+
 // Force-run the signals poll on demand (V3_BLUEPRINT §7) — verification and
 // the interrupt-tier proof without waiting for the 30-minute cron.
 app.post("/api/admin/signals", async (c) => {

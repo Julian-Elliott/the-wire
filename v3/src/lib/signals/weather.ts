@@ -48,7 +48,8 @@ function triggersFor(pt: WeatherPoint, place: string): Trigger[] {
     out.push({
       source: "weather",
       desk: "weather",
-      dedupKey: `weather:rain:${place}:${new Date().toISOString().slice(0, 13)}`,
+      // Daily bucket, same state-not-event lesson as the carbon trigger.
+      dedupKey: `weather:rain:${place}:${new Date().toISOString().slice(0, 10)}`,
       title: "Heavy rain expected",
       summary: "A wet window is coming — worth the umbrella and getting washing off the line.",
       why: "high precipitation probability in the next few hours",
