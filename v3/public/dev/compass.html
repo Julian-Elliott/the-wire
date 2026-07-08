@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>The Wire — Preference Compass (dev)</title>
+<style>
+  :root { --bg:#0e0f12; --panel:#16181d; --ink:#e8e6e1; --dim:#9a968e; --line:#262930;
+    --liked:#5aa469; --skipped:#c0564e; --unseen:#4a4e57; --accent:#d4a24e; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink);
+    font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
+  header { padding:18px; border-bottom:1px solid var(--line); }
+  h1 { margin:0 0 4px; font-size:20px; letter-spacing:.04em; }
+  .sub { color:var(--dim); font-size:13px; }
+  main { max-width:900px; margin:0 auto; padding:16px; }
+  .caveat { background:#1c1408; border:1px solid #3a2c10; color:#d8c69a; border-radius:8px;
+    padding:10px 12px; font-size:12.5px; margin-bottom:16px; }
+  .desk { background:var(--panel); border:1px solid var(--line); border-radius:10px;
+    padding:14px 16px; margin:12px 0; }
+  .deskhead { display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; margin-bottom:10px; }
+  .deskname { font-size:16px; font-weight:600; color:var(--accent); }
+  .auc { font-variant-numeric:tabular-nums; font-weight:600; }
+  .auc.good { color:var(--liked); } .auc.meh { color:var(--dim); } .auc.bad { color:var(--skipped); }
+  .status { font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--dim);
+    border:1px solid var(--line); border-radius:4px; padding:1px 6px; }
+  .bars { display:flex; flex-direction:column; gap:3px; }
+  .bar { display:flex; align-items:center; gap:8px; }
+  .track { flex:1; height:16px; background:#0c0d10; border-radius:3px; overflow:hidden; }
+  .fill { height:100%; }
+  .fill.liked { background:var(--liked); } .fill.skipped { background:var(--skipped); }
+  .fill.unseen { background:var(--unseen); }
+  .lbl { width:44px; text-align:right; font-variant-numeric:tabular-nums; color:var(--dim); font-size:12px; }
+  .title { flex:2; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-size:12.5px; }
+  .legend { color:var(--dim); font-size:12px; margin-top:6px; }
+  .dot { display:inline-block; width:9px; height:9px; border-radius:2px; margin:0 3px 0 10px; vertical-align:middle; }
+  #empty,#err { text-align:center; color:var(--dim); padding:60px 20px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Preference Compass <span class="sub">· dev</span></h1>
+  <div class="sub" id="sub">loading your preference vectors…</div>
+</header>
+<main id="main"></main>
+<script>
+(() => {
+  "use strict";
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
+
+  const aucClass = (a) => a == null ? "meh" : a >= 0.65 ? "good" : a <= 0.55 ? "bad" : "meh";
+  // Cosine → 0..100% bar. Cosines cluster in [~0.6,1] on sentence embeddings
+  // even after centring, so rescale for visibility: map [-0.2,0.6] → [0,100].
+  const pct = (cos) => Math.max(2, Math.min(100, Math.round(((cos + 0.2) / 0.8) * 100)));
+
+  function render(data) {
+    if (!data.desks || !data.desks.length) {
+      $("main").innerHTML = `<div id="empty">No embeddings to analyse yet.<br>${esc(data.note || "Read some stories in the reader and check back.")}</div>`;
+      $("sub").textContent = "nothing to show yet";
+      return;
+    }
+    $("sub").innerHTML = `${data.desks.length} desks · ${data.dims}-dim vectors · ` +
+      `<b>AUC</b> = P(a story you read scores above one you skipped); 0.50 = learned nothing, higher = tracking you`;
+    const caveat = `<div class="caveat">This is a debugging instrument, not the model. 2D-friendly bars compress
+      real ${esc(data.dims)}-dimensional cosine geometry — trust the <b>AUC number</b> and its drift over days, not the
+      exact bar lengths. A desk needs ~20 "read" stories before its vector is reliable; below that it is warming up.</div>`;
+    $("main").innerHTML = caveat + data.desks.map((d) => {
+      const auc = d.auc == null ? "n/a" : d.auc.toFixed(2);
+      const bars = d.stories.slice(0, 12).map((s) => `
+        <div class="bar" title="${esc(s.title)} — cos ${s.cosine.toFixed(3)}">
+          <div class="track"><div class="fill ${s.behaviour}" style="width:${pct(s.cosine)}%"></div></div>
+          <div class="lbl">${s.cosine.toFixed(2)}</div>
+          <div class="title">${esc(s.title)}</div>
+        </div>`).join("");
+      return `<div class="desk">
+        <div class="deskhead">
+          <span class="deskname">${esc(d.desk)}</span>
+          <span class="status">${esc(d.status)} · ${d.positives} read</span>
+          <span class="auc ${aucClass(d.auc)}">AUC ${auc}</span>
+          ${d.passportWeight != null ? `<span class="sub">passport ${d.passportWeight.toFixed(2)}</span>` : ""}
+        </div>
+        <div class="bars">${bars || '<div class="sub">no stories in this edition</div>'}</div>
+      </div>`;
+    }).join("") +
+    `<div class="legend"><span class="dot" style="background:var(--liked)"></span>read
+      <span class="dot" style="background:var(--skipped)"></span>skipped/dismissed
+      <span class="dot" style="background:var(--unseen)"></span>unseen — a learning desk shows green bars drifting right of red.</div>`;
+  }
+
+  fetch("/api/dev/preference")
+    .then((r) => r.status === 401 ? Promise.reject("Sign in to the reader first, then reload this page.") : r.json())
+    .then(render)
+    .catch((e) => { $("main").innerHTML = `<div id="err">${esc(e)}</div>`; $("sub").textContent = "not signed in"; });
+})();
+</script>
+</body>
+</html>

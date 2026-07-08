@@ -245,6 +245,50 @@ export class NewsroomDO extends DurableObject<Env> {
     }));
   }
 
+  // Embeddings for the preference dev view (docs/research/PREFERENCE_VECTORS).
+  // Returns vectors as plain number[] (JSON/RPC-serialisable). For the join,
+  // callers hash a read_ledger story_key to its story_id.
+  async embeddingsFor(
+    ids: string[],
+  ): Promise<{ story_id: string; desk: string; title: string; vec: number[] | null }[]> {
+    if (!ids.length) return [];
+    // DO SQLite caps bound variables ~100 (far below standard SQLite), so
+    // chunk the IN query — a migrated user has hundreds of ledger keys.
+    const CHUNK = 80;
+    const out: { story_id: string; desk: string; title: string; vec: number[] | null }[] = [];
+    for (let i = 0; i < ids.length; i += CHUNK) {
+      const batch = ids.slice(i, i + CHUNK);
+      const placeholders = batch.map(() => "?").join(",");
+      const rows = this.ctx.storage.sql
+        .exec<{ story_id: string; desk: string; title: string; embedding: ArrayBuffer | null }>(
+          `SELECT story_id, desk, title, embedding FROM stories WHERE story_id IN (${placeholders})`,
+          ...batch,
+        )
+        .toArray();
+      for (const r of rows) {
+        const v = blobToVec(r.embedding);
+        out.push({ story_id: r.story_id, desk: r.desk, title: r.title, vec: v ? [...v] : null });
+      }
+    }
+    return out;
+  }
+
+  // Current edition with embeddings, for scoring against the centroids.
+  async feedWithEmbeddings(
+    limit = 100,
+  ): Promise<{ story_id: string; desk: string; title: string; vec: number[] | null }[]> {
+    const rows = this.ctx.storage.sql
+      .exec<{ story_id: string; desk: string; title: string; embedding: ArrayBuffer | null }>(
+        "SELECT story_id, desk, title, embedding FROM stories ORDER BY added_at DESC LIMIT ?",
+        Math.min(Math.max(1, limit), 200),
+      )
+      .toArray();
+    return rows.map((r) => {
+      const v = blobToVec(r.embedding);
+      return { story_id: r.story_id, desk: r.desk, title: r.title, vec: v ? [...v] : null };
+    });
+  }
+
   async stats(): Promise<{ stories: number; newestAddedAt: string | null }> {
     const row = this.ctx.storage.sql
       .exec<{ n: number; newest: string | null }>(

@@ -6,6 +6,7 @@ import {
 import {
   PERSONA_TOOLS, verifyPersonaToken, type PersonaClaims,
 } from "./lib/persona-token";
+import { analyseDesk, meanVector, type DeskAnalysis } from "./lib/preference";
 import { runSignals } from "./signals";
 import { dedupeBatch, isStale, titleKey, urlKey } from "./lib/dedup";
 import { SUMMARY_MAX, TITLE_STORE_MAX, URL_STORE_MAX, cleanDeskId } from "./lib/text";
@@ -899,6 +900,93 @@ app.post("/api/admin/persona-client", async (c) => {
      ON CONFLICT(client_id) DO UPDATE SET name = excluded.name, scopes = excluded.scopes`,
   ).bind(clientId, String(p.name ?? clientId).slice(0, 80), JSON.stringify(scopes), new Date().toISOString()).run();
   return c.json({ ok: true, clientId, scopes });
+});
+
+// ---- Preference-vector dev view (docs/research/PREFERENCE_VECTORS.md) -------
+// "Is Persona learning you?" — per-desk positive centroids from the read
+// ledger, today's edition scored by cosine, the liked-vs-skipped AUC printed.
+// Session-gated: you only ever see your OWN preference data (this is also the
+// eventual "why you're seeing this" transparency surface).
+
+async function sha256Hex(s: string): Promise<string> {
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s));
+  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+app.get("/api/dev/preference", async (c) => {
+  const sess = await sessionOf(c);
+  if (!sess) return c.json({ ok: false, error: "sign in required" }, 401);
+  try {
+
+  // Read ledger → behaviour labels. read/dismissed are strong; seen is weak
+  // (migrated v2 records are 'seen'); we treat read as liked, dismissed as
+  // an explicit skip, seen as a soft skip.
+  const ledger = await c.env.DB
+    .prepare("SELECT story_key, state FROM read_ledger WHERE user_id = ?1 LIMIT 2000")
+    .bind(sess.uid)
+    .all<{ story_key: string; state: string }>();
+  const behaviourByStoryId = new Map<string, "liked" | "skipped">();
+  await Promise.all(
+    ledger.results.map(async (r) => {
+      const id = await sha256Hex(r.story_key);
+      behaviourByStoryId.set(id, r.state === "read" ? "liked" : "skipped");
+    }),
+  );
+
+  const nr = c.env.NEWSROOM.get(c.env.NEWSROOM.idFromName("main")) as unknown as {
+    embeddingsFor(ids: string[]): Promise<{ story_id: string; desk: string; title: string; vec: number[] | null }[]>;
+    feedWithEmbeddings(limit?: number): Promise<{ story_id: string; desk: string; title: string; vec: number[] | null }[]>;
+  };
+
+  // Liked/skipped story embeddings (from the ledger) + the current edition.
+  const [labelled, current] = await Promise.all([
+    nr.embeddingsFor([...behaviourByStoryId.keys()]),
+    nr.feedWithEmbeddings(100),
+  ]);
+
+  // Corpus mean over EVERY embedding we have in hand (anisotropy centring).
+  const allVecs: Float32Array[] = [];
+  for (const r of [...labelled, ...current]) if (r.vec) allVecs.push(Float32Array.from(r.vec));
+  const corpusMean = meanVector(allVecs);
+  if (!corpusMean) {
+    return c.json({ ok: true, uid: sess.uid, desks: [], note: "no embeddings yet — read some stories" });
+  }
+
+  // Passport prior: migrated desk weights from Persona traits.
+  const profile = profileStub(c.env, sess.uid);
+  const weights = new Map(
+    (await profile.getTraits("desk.weight.")).map((t) => [t.key.slice("desk.weight.".length), t.value]),
+  );
+
+  // Group by desk: liked embeddings feed the centroid; current stories get
+  // labelled by the ledger (unseen if not in it).
+  const desks = new Set<string>();
+  for (const r of current) if (r.vec) desks.add(r.desk);
+  const likedByDesk = new Map<string, Float32Array[]>();
+  for (const r of labelled) {
+    if (!r.vec || behaviourByStoryId.get(r.story_id) !== "liked") continue;
+    (likedByDesk.get(r.desk) ?? likedByDesk.set(r.desk, []).get(r.desk)!).push(Float32Array.from(r.vec));
+  }
+
+  const analyses: DeskAnalysis[] = [];
+  for (const desk of [...desks].sort()) {
+    const currentForDesk = current
+      .filter((r) => r.desk === desk && r.vec)
+      .map((r) => ({
+        id: r.story_id,
+        title: r.title,
+        vec: Float32Array.from(r.vec!),
+        behaviour: behaviourByStoryId.get(r.story_id) ?? ("unseen" as const),
+      }));
+    analyses.push(
+      analyseDesk(desk, likedByDesk.get(desk) ?? [], corpusMean, currentForDesk, weights.get(desk) ?? null),
+    );
+  }
+
+  return c.json({ ok: true, uid: sess.uid, dims: corpusMean.length, desks: analyses });
+  } catch (e) {
+    return c.json({ ok: false, error: e instanceof Error ? `${e.message}` : String(e) }, 500);
+  }
 });
 
 // Per-user Persona audit — the signed-in user sees who read what.
