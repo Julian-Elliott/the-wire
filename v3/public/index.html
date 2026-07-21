@@ -37,6 +37,7 @@
   .meta { display: flex; gap: 8px; align-items: center; font-size: 12px; color: var(--dim); flex-wrap: wrap; }
   .desk { color: var(--accent); text-transform: uppercase; letter-spacing: .08em; font-weight: 600; }
   .saga-badge { color: var(--saga); border: 1px solid var(--saga); border-radius: 4px; padding: 0 5px; font-size: 11px; }
+  .rankwhy { color: var(--accent); font-size: 11px; opacity: 0.85; }
   h2 { margin: 6px 0 6px; font-size: 18px; line-height: 1.35; }
   h2 a { color: var(--ink); text-decoration: none; }
   h2 a:hover { text-decoration: underline; text-decoration-color: var(--accent); }
@@ -176,6 +177,7 @@
           ${i.saga ? '<span class="saga-badge">saga</span>' : ""}
           <span>${esc(host(i.url))}</span>
           <span>${esc(ago(i.addedAt))}</span>
+          ${i.rankWhy ? `<span class="rankwhy" title="why you're seeing this">✦ ${esc(i.rankWhy)}</span>` : ""}
         </div>
         <h2><a href="${esc(safeUrl(i.url))}" target="_blank" rel="noopener noreferrer">${esc(i.title)}</a></h2>
         <p class="summary">${esc(i.summary)}</p>
@@ -190,8 +192,9 @@
       const res = await fetch("/api/feed/latest?limit=100");
       const data = await res.json();
       items = data.items ?? [];
+      const rankedNote = data.ranked ? " · ranked for you" : "";
       $("stamp").textContent = items.length
-        ? `${items.length} stories · updated ${new Date().toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}`
+        ? `${items.length} stories · updated ${new Date().toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}${rankedNote}`
         : "no edition yet";
       renderDesks();
       renderFeed();

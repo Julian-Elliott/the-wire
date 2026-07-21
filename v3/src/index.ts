@@ -6,7 +6,8 @@ import {
 import {
   PERSONA_TOOLS, verifyPersonaToken, type PersonaClaims,
 } from "./lib/persona-token";
-import { analyseDesk, meanVector, type DeskAnalysis } from "./lib/preference";
+import { analyseDesk, buildCentroid, meanVector, type DeskAnalysis } from "./lib/preference";
+import { rankStories, whyRanked, type RankableStory } from "./lib/rank";
 import { runSignals } from "./signals";
 import { dedupeBatch, isStale, titleKey, urlKey } from "./lib/dedup";
 import { SUMMARY_MAX, TITLE_STORE_MAX, URL_STORE_MAX, cleanDeskId } from "./lib/text";
@@ -495,28 +496,69 @@ app.get("/api/admin/profile", async (c) => {
 
 app.get("/api/feed/latest", async (c) => {
   const limit = Number(c.req.query("limit") ?? 50);
+  const n = Number.isFinite(limit) ? limit : 50;
   // Anonymous callers get global stories only; a session additionally
   // unlocks stories scoped to that user (per-user triggers, §7).
   const sess = await sessionOf(c);
-  const items = await newsroom(c.env).feed(Number.isFinite(limit) ? limit : 50, sess?.uid ?? null);
+  const items = await newsroom(c.env).feed(n, sess?.uid ?? null);
+
+  const shape = (s: (typeof items)[number], extra: Record<string, unknown> = {}) => ({
+    id: s.story_id, saga: s.saga_id, desk: s.desk, title: s.title, summary: s.summary,
+    why: s.why, url: s.url, sources: s.sources, salience: s.salience, priority: s.priority,
+    quote: s.quote, publishedAt: s.published_at, addedAt: s.added_at, ...extra,
+  });
+
+  // Signed-out (or opt-out via ?order=latest): chronological, as before.
+  if (!sess || c.req.query("order") === "latest") {
+    return c.json({ ok: true, ranked: false, count: items.length, items: items.map((s) => shape(s)) });
+  }
+
+  // RANKED ASSEMBLY (V3_BLUEPRINT §3 L4, LLM-free): desk weight × salience ×
+  // recency × trait affinity. The vectors the compass proved out now decide
+  // order. Priority-3 (interrupt-tier) stories always float to the very top —
+  // urgency outranks taste. Every item carries its "why you're seeing this".
+  const nr = c.env.NEWSROOM.get(c.env.NEWSROOM.idFromName("main")) as unknown as NewsroomEmbeds;
+  const withVecs = await nr.feedWithEmbeddings(Math.max(n, 100));
+  const vecById = new Map(withVecs.map((r) => [r.story_id, r.vec]));
+  const model = await buildUserModel(
+    c.env, sess.uid,
+    withVecs.map((r) => ({ story_id: r.story_id, desk: r.desk, vec: r.vec })),
+  );
+
+  const rankable: (RankableStory & { src: (typeof items)[number] })[] = items.map((s) => ({
+    id: s.story_id,
+    desk: s.desk,
+    salience: s.salience,
+    addedAtMs: Date.parse(s.added_at) || Date.now(),
+    vec: vecById.get(s.story_id) ? Float32Array.from(vecById.get(s.story_id)!) : null,
+    src: s,
+  }));
+
+  const ctx = {
+    nowMs: Date.now(),
+    deskWeight: (d: string) => model.weightByDesk.get(d) ?? 1,
+    deskCentroid: (d: string) => model.centroidByDesk.get(d) ?? null,
+    corpusMean: model.corpusMean,
+  };
+  const ranked = rankStories(rankable, ctx);
+
+  // Priority-3 first (urgency beats taste), then by score.
+  ranked.sort((a, b) => {
+    const pa = a.story.src.priority === 3 ? 1 : 0;
+    const pb = b.story.src.priority === 3 ? 1 : 0;
+    return pb - pa || b.score - a.score;
+  });
+
   return c.json({
     ok: true,
-    count: items.length,
-    items: items.map((s) => ({
-      id: s.story_id,
-      saga: s.saga_id,
-      desk: s.desk,
-      title: s.title,
-      summary: s.summary,
-      why: s.why,
-      url: s.url,
-      sources: s.sources,
-      salience: s.salience,
-      priority: s.priority,
-      quote: s.quote,
-      publishedAt: s.published_at,
-      addedAt: s.added_at,
-    })),
+    ranked: true,
+    count: ranked.length,
+    items: ranked.slice(0, n).map((r) =>
+      shape(r.story.src, {
+        rankScore: Math.round(r.score * 1000) / 1000,
+        rankWhy: whyRanked(r.components, r.story.desk),
+      }),
+    ),
   });
 });
 
@@ -1003,6 +1045,59 @@ app.post("/api/admin/persona-client", async (c) => {
 async function sha256Hex(s: string): Promise<string> {
   const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s));
   return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+interface NewsroomEmbeds {
+  embeddingsFor(ids: string[]): Promise<{ story_id: string; desk: string; title: string; vec: number[] | null }[]>;
+  feedWithEmbeddings(limit?: number): Promise<{ story_id: string; desk: string; title: string; vec: number[] | null }[]>;
+}
+
+// The per-user taste model shared by the compass and the ranked feed: the
+// corpus mean (anisotropy centring), a mean-centred positive centroid per
+// desk (built from 'read' history), and the passport desk weights. Built
+// LLM-free from data already in hand.
+async function buildUserModel(
+  env: Env,
+  uid: string,
+  current: { story_id: string; desk: string; vec: number[] | null }[],
+): Promise<{
+  corpusMean: Float32Array | null;
+  centroidByDesk: Map<string, Float32Array>;
+  weightByDesk: Map<string, number>;
+  likedIds: Set<string>;
+}> {
+  const ledger = await env.DB
+    .prepare("SELECT story_key, state FROM read_ledger WHERE user_id = ?1 AND state = 'read' LIMIT 2000")
+    .bind(uid)
+    .all<{ story_key: string; state: string }>();
+  const likedIds = new Set(await Promise.all(ledger.results.map((r) => sha256Hex(r.story_key))));
+
+  const nr = env.NEWSROOM.get(env.NEWSROOM.idFromName("main")) as unknown as NewsroomEmbeds;
+  const liked = likedIds.size ? await nr.embeddingsFor([...likedIds]) : [];
+
+  const allVecs: Float32Array[] = [];
+  for (const r of liked) if (r.vec) allVecs.push(Float32Array.from(r.vec));
+  for (const r of current) if (r.vec) allVecs.push(Float32Array.from(r.vec));
+  const corpusMean = meanVector(allVecs);
+
+  const likedByDesk = new Map<string, Float32Array[]>();
+  for (const r of liked) {
+    if (!r.vec) continue;
+    (likedByDesk.get(r.desk) ?? likedByDesk.set(r.desk, []).get(r.desk)!).push(Float32Array.from(r.vec));
+  }
+  const centroidByDesk = new Map<string, Float32Array>();
+  if (corpusMean) {
+    for (const [desk, vecs] of likedByDesk) {
+      const cen = buildCentroid(vecs, corpusMean);
+      if (cen) centroidByDesk.set(desk, cen);
+    }
+  }
+
+  const profile = profileStub(env, uid);
+  const weightByDesk = new Map(
+    (await profile.getTraits("desk.weight.")).map((t) => [t.key.slice("desk.weight.".length), t.value]),
+  );
+  return { corpusMean, centroidByDesk, weightByDesk, likedIds };
 }
 
 app.get("/api/dev/preference", async (c) => {
