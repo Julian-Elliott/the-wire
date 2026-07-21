@@ -70,6 +70,7 @@ const profileStub = (env: Env, uid: string) =>
     isInterruptible(priority: 1 | 2 | 3): Promise<PersonaVerdict>;
     recordSignal(sig: { sourceApp: string; type: string; entity?: string; value?: string }): Promise<{ accepted: boolean; affectedTraits: string[] }>;
     recordAudit(client: string, tool: string): Promise<void>;
+    purge(): Promise<{ ok: true; cleared: string[] }>;
   };
 
 // Worker-originated phone alert (RUNBOOK §2). Fire-and-forget, never throws.
@@ -651,16 +652,37 @@ app.post("/auth/apple/events", async (c) => {
   const sub = String(event.sub ?? "");
   if (sub && (type === "consent-revoked" || type === "account-delete")) {
     const uid = `apple:${sub}`;
+    const nowIso = new Date().toISOString();
     // Store the revocation SECOND; sessions with iat <= this die. TTL a few
     // days beyond the max session so the key self-cleans (review fix).
     await c.env.KV.put(`revoked:${uid}`, String(Math.floor(Date.now() / 1000)), {
       expirationTtl: (SESSION_DAYS + 3) * 86400,
     });
+    // Consent ledger: every lifecycle event is now WRITTEN DOWN (was never
+    // recorded — the privacy critique's finding). The ledger is the auditable
+    // record the privacy page promises.
+    await c.env.DB.prepare(
+      "INSERT INTO consent_ledger (user_id, client_id, action, at) VALUES (?1, 'apple-signin', ?2, ?3)",
+    ).bind(uid, type, nowIso).run();
+
+    // account-delete = ACTUAL erasure (was a runbook note; the critique's
+    // sharpest finding). Wipe the ProfileDO and every app-side row keyed to
+    // this user, in one pass. GDPR erasure is a real operation, not a text.
+    if (type === "account-delete") {
+      try {
+        await profileStub(c.env, uid).purge();
+      } catch { /* DO may not exist; the D1 wipes below still run */ }
+      await c.env.DB.batch([
+        c.env.DB.prepare("DELETE FROM read_ledger WHERE user_id = ?1").bind(uid),
+        c.env.DB.prepare("DELETE FROM demotion_ledger WHERE user_id = ?1").bind(uid),
+        c.env.DB.prepare("DELETE FROM users WHERE uid = ?1").bind(uid),
+      ]);
+    }
     alarm(
       c.env,
       c.executionCtx,
       `Apple ${type}`,
-      `${uid} — sessions invalidated.${type === "account-delete" ? " RUNBOOK: purge ProfileDO + read_ledger rows." : ""}`,
+      `${uid} — sessions invalidated, consent logged${type === "account-delete" ? ", profile + ledgers ERASED" : ""}.`,
     );
   }
   return c.json({ ok: true, received: type });
@@ -823,11 +845,24 @@ async function personaAuth(
   return { claims };
 }
 
-// The uid a call targets: a uid-pinned token may only act on its own user;
-// an unpinned token names the uid in the query/body.
+// The uid a call targets. Privacy critique fix — no god-key: a uid-pinned
+// token may act ONLY on its own user; an unpinned token may name another uid
+// ONLY if it carries the explicit "cross-user" scope (for a genuine
+// multi-user client like the routine). Without that scope an unpinned token
+// is refused — one operator token can no longer read all 20 profiles via
+// ?uid=.
 function personaUid(claims: PersonaClaims, requested: string | undefined): string | null {
   if (claims.uid) return !requested || requested === claims.uid ? claims.uid : null;
+  if (!claims.scopes.includes("cross-user")) return null;
   return requested && /^apple:[A-Za-z0-9._-]{1,80}$/.test(requested) ? requested : null;
+}
+
+// Self-service transparency (power-user critique): a signed-in user reads
+// their OWN Persona data with no client token — the "why you're seeing this"
+// surface. Returns the session uid, or null to fall through to token auth.
+async function personaSelf(c: { req: { raw: Request }; env: Env }): Promise<string | null> {
+  const s = await sessionOf(c);
+  return s?.uid ?? null;
 }
 
 // Tool list, filtered to the caller's scopes (§8: unscoped tools are invisible).
@@ -844,28 +879,44 @@ app.get("/api/persona/tools", async (c) => {
 });
 
 app.get("/api/persona/get_context", async (c) => {
-  const a = await personaAuth(c, "context:read");
-  if ("error" in a) return a.error;
-  const uid = personaUid(a.claims, c.req.query("uid"));
+  const self = await personaSelf(c);
+  let uid: string | null;
+  let client: string;
+  if (self) { uid = self; client = "self"; }
+  else {
+    const a = await personaAuth(c, "context:read");
+    if ("error" in a) return a.error;
+    uid = personaUid(a.claims, c.req.query("uid"));
+    client = a.claims.sub;
+  }
   if (!uid) return c.json({ ok: false, error: "uid not permitted" }, 403);
   const stub = profileStub(c.env, uid);
   const ctx = await stub.getContext();
-  c.executionCtx.waitUntil(stub.recordAudit(a.claims.sub, "get_context"));
+  c.executionCtx.waitUntil(stub.recordAudit(client, "get_context"));
   return c.json({ ok: true, uid, context: ctx });
 });
 
 app.get("/api/persona/get_traits", async (c) => {
-  const a = await personaAuth(c, "traits:read");
-  if ("error" in a) return a.error;
-  const uid = personaUid(a.claims, c.req.query("uid"));
+  const self = await personaSelf(c);
+  let uid: string | null;
+  let client: string;
+  if (self) { uid = self; client = "self"; }
+  else {
+    const a = await personaAuth(c, "traits:read");
+    if ("error" in a) return a.error;
+    uid = personaUid(a.claims, c.req.query("uid"));
+    client = a.claims.sub;
+  }
   if (!uid) return c.json({ ok: false, error: "uid not permitted" }, 403);
   const stub = profileStub(c.env, uid);
   const traits = await stub.getTraits(c.req.query("prefix") ?? undefined);
-  c.executionCtx.waitUntil(stub.recordAudit(a.claims.sub, "get_traits"));
+  c.executionCtx.waitUntil(stub.recordAudit(client, "get_traits"));
   return c.json({ ok: true, uid, traits });
 });
 
 app.get("/api/persona/is_interruptible", async (c) => {
+  // policy eval is a CLIENT action (deciding whether to reach a user), not a
+  // self-introspection — token only, no session short-circuit.
   const a = await personaAuth(c, "policy:eval");
   if ("error" in a) return a.error;
   const uid = personaUid(a.claims, c.req.query("uid"));
@@ -911,7 +962,7 @@ app.post("/api/admin/persona-client", async (c) => {
   if (gate) return gate;
   const bodyText = await readBodyBounded(c.req.raw, 8 * 1024);
   if (bodyText === null) return c.json({ ok: false, error: "payload too large" }, 413);
-  let p: { clientId?: string; name?: string; scopes?: string[]; action?: string };
+  let p: { clientId?: string; name?: string; scopes?: string[]; action?: string; uid?: string };
   try {
     p = JSON.parse(bodyText);
   } catch {
@@ -919,8 +970,14 @@ app.post("/api/admin/persona-client", async (c) => {
   }
   const clientId = String(p.clientId ?? "").replace(/[^a-z0-9._-]/gi, "").slice(0, 60);
   if (!clientId) return c.json({ ok: false, error: "bad clientId" }, 400);
+  const uid = p.uid && /^apple:[A-Za-z0-9._-]{1,80}$/.test(p.uid) ? p.uid : null;
   if (p.action === "revoke") {
     await c.env.DB.prepare("DELETE FROM clients WHERE client_id = ?1").bind(clientId).run();
+    if (uid) {
+      await c.env.DB.prepare(
+        "INSERT INTO consent_ledger (user_id, client_id, action, at) VALUES (?1, ?2, 'revoke', ?3)",
+      ).bind(uid, clientId, new Date().toISOString()).run();
+    }
     return c.json({ ok: true, clientId, revoked: true });
   }
   const scopes = Array.isArray(p.scopes) ? p.scopes.map(String).slice(0, 20) : [];
@@ -928,6 +985,12 @@ app.post("/api/admin/persona-client", async (c) => {
     `INSERT INTO clients (client_id, name, scopes, created_at) VALUES (?1, ?2, ?3, ?4)
      ON CONFLICT(client_id) DO UPDATE SET name = excluded.name, scopes = excluded.scopes`,
   ).bind(clientId, String(p.name ?? clientId).slice(0, 80), JSON.stringify(scopes), new Date().toISOString()).run();
+  // A uid-pinned grant is a per-user consent event — record it.
+  if (uid) {
+    await c.env.DB.prepare(
+      "INSERT INTO consent_ledger (user_id, client_id, action, at) VALUES (?1, ?2, 'grant', ?3)",
+    ).bind(uid, clientId, new Date().toISOString()).run();
+  }
   return c.json({ ok: true, clientId, scopes });
 });
 

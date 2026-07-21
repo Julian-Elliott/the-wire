@@ -149,6 +149,19 @@ export class ProfileDO extends DurableObject<Env> {
   }
 
   // Coarse device state (§2): the ONLY context the server ever stores.
+  // GDPR erasure (V3_BLUEPRINT §4 "erasure is a single-object operation"):
+  // wipe every table this DO owns. Idempotent. The caller also clears the
+  // app-side ledgers (read/demotion) and the users registry row.
+  async purge(): Promise<{ ok: true; cleared: string[] }> {
+    const cleared: string[] = [];
+    for (const t of ["signals", "traits", "meta", "audit"] as const) {
+      this.ctx.storage.sql.exec(`DELETE FROM ${t}`);
+      cleared.push(t);
+    }
+    await this.ctx.storage.deleteAlarm();
+    return { ok: true, cleared };
+  }
+
   async reportState(state: CoarseState, place?: PlaceClass, nowMs = Date.now()): Promise<void> {
     this.ctx.storage.sql.exec(
       "INSERT INTO meta (key, value) VALUES ('state', ?), ('state_at', ?), ('place', ?) " +

@@ -30,8 +30,9 @@ describe("Persona tool surface", () => {
   });
 
   it("registered client can read context and it is audited", async () => {
-    await register("the-wire", ["context:read", "signals:write"]);
-    const tok = await mint({ sub: "the-wire", scopes: ["context:read", "signals:write"] });
+    // The Wire acts across all its users → a legitimate cross-user client.
+    await register("the-wire", ["context:read", "signals:write", "cross-user"]);
+    const tok = await mint({ sub: "the-wire", scopes: ["context:read", "signals:write", "cross-user"] });
 
     // Seed a signal so the profile has something.
     await SELF.fetch(`${BASE}/api/persona/record_signal`, {
@@ -68,8 +69,8 @@ describe("Persona tool surface", () => {
   });
 
   it("revoking the client row kills its tokens immediately", async () => {
-    await register("temp", ["context:read"]);
-    const tok = await mint({ sub: "temp", scopes: ["context:read"] });
+    await register("temp", ["context:read", "cross-user"]);
+    const tok = await mint({ sub: "temp", scopes: ["context:read", "cross-user"] });
     expect((await SELF.fetch(`${BASE}/api/persona/get_context?uid=apple:z`, { headers: bearer(tok) })).status).toBe(200);
     await SELF.fetch(`${BASE}/api/admin/persona-client`, {
       method: "POST",
@@ -80,8 +81,8 @@ describe("Persona tool surface", () => {
   });
 
   it("is_interruptible returns the trust-ladder verdict", async () => {
-    await register("dj", ["policy:eval"]);
-    const tok = await mint({ sub: "dj", scopes: ["policy:eval"] });
+    await register("dj", ["policy:eval", "cross-user"]);
+    const tok = await mint({ sub: "dj", scopes: ["policy:eval", "cross-user"] });
     const res = await SELF.fetch(`${BASE}/api/persona/is_interruptible?uid=apple:dj-user&priority=2`, { headers: bearer(tok) });
     const b = (await res.json()) as Record<string, any>;
     expect(b.decision).toBe("digest"); // priority < 3 never interrupts
