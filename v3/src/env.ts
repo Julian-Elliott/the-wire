@@ -6,6 +6,7 @@ export interface Env {
   DB: D1Database;
   BACKUPS: R2Bucket;
   SPEND: AnalyticsEngineDataset;
+  ENGAGE: AnalyticsEngineDataset;
   NEWSROOM: DurableObjectNamespace;
   PROFILES: DurableObjectNamespace;
   CF_VERSION_METADATA?: { id: string; tag?: string };
@@ -38,6 +39,7 @@ export const REQUIRED_BINDINGS = [
   "DB",
   "BACKUPS",
   "SPEND",
+  "ENGAGE",
   "NEWSROOM",
   "PROFILES",
 ] as const;

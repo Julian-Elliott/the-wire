@@ -230,3 +230,78 @@ linking, native video, any read-time per-user LLM call.
    feature.
 4. **The scorecard can lie early.** Twenty readers make small denominators;
    report counts alongside rates, and resist redesigning on one bad week.
+
+---
+
+## The ranking engine (the vector question, answered)
+
+Asked on 7 July: can the news live in a vector database that groups articles
+by likelihood-to-be-liked, YouTube-style rather than plain similarity, with a
+time value, searchable in the background. Answer: yes, and v3 already owns
+three of the four parts, so this is the design for the ranked L4 assembly
+item rather than a new system.
+
+- **Item vectors exist.** Every story is embedded at ingest (bge-m3) and
+  stored as D1 rows; clustering already runs brute-force cosine over them.
+  At 40 stories a day a dedicated vector database buys nothing; Vectorize
+  stays the deliberate seam swap if the corpus ever passes ~100k vectors.
+- **The taste vector exists.** The preference compass already folds the
+  read ledger into per-desk mean vectors (read = liked, dismissed = skip,
+  seen = soft skip). Promote it from dev view to ranker input: one taste
+  vector per reader per interest, refreshed by the ProfileDO weekly alarm
+  and nudged incrementally on each ledger write (EMA, so it is background
+  by construction).
+- **The time value is a freshness decay**, exp(-age_hours / 36) as the
+  starting half-life, blended at score time, never baked into stored
+  vectors: score = w1 * cosine(taste, story) + w2 * salience/100 +
+  w3 * freshness. Weights start hand-set (0.5 / 0.3 / 0.2) and get tuned
+  against the scorecard, not against vibes.
+- **The YouTube-style part beyond similarity is a popularity prior.** At
+  twenty readers, collaborative filtering has no signal, so the honest
+  substitute is a small global engagement term from wire_engagement
+  (stories with reads get a bounded nudge). Real co-engagement ("readers
+  like you read this") becomes worth revisiting near a hundred readers,
+  and slots in as a fourth term without changing the shape.
+- **Searchable falls out for free**: embed the query, cosine against the
+  same story rows. This is the identical endpoint the search-one-thing
+  onboarding needs, so build it once, use it twice.
+
+Non-negotiable inherited from the plan: all of this is assembly-time
+arithmetic over cached vectors, no read-time LLM calls.
+
+---
+
+## Personalisation, restored: the feature set
+
+Asked on 7 July: once the first architecture steps are in, define the
+features that put personalisation back in place. v2 parity plus the ranking
+engine, in dependency order; primitives in brackets all exist today.
+
+1. **Ranked personal feed**, Wave A: the ranking engine above ordering
+   /api/feed, per reader [embeddings, read_ledger, compass, salience].
+2. **Interest management UI**, Wave A: add, remove, reorder interests in a
+   manage sheet; entity-resolved add with the confirmation echo
+   [ProfileDO desk weights, entity resolution from the onboarding item].
+3. **Explicit feedback on cards**, Wave A: a Not-for-me control and a More
+   Like This affordance writing dismissed/read to the ledger, which the
+   taste vector then absorbs [read_ledger, /api/read].
+4. **Why-this transparency**, Wave A with the ranked feed: every ranked
+   item can say "because you follow X and read Y", derived from the same
+   compass arithmetic that scored it [preference lib].
+5. **Personal digest email**, Wave A-B: the ranked edition rendered to the
+   registered relay domain, one send per reader per morning
+   [Email Sending, edition JSON].
+6. **Mute suggestions**, Wave B: repeated dismissals in a cluster propose a
+   mute in the weekly alarm, never auto-applied [ProfileDO alarm,
+   dismissal counts].
+7. **Writer register per interest**, Wave B, v2 parity: brief / analyst /
+   colour / tabloid punch, injected into the routine prompt like notes
+   already are [routine skills refactor].
+8. **Freshness window per interest**, Wave B, v2 parity: desk defaults with
+   a global clamp [routine prompt, assembly filter].
+9. **Personal audio edition**, Wave C: the ranked edition assembled from
+   audio cells with the reader's greeting clip [Phase 3 audio cells].
+
+The scorecard gates the lot: ranked feed owns read-to-served, feedback
+controls own dismissal rate, the digest owns days-active. Nothing in this
+list ships without its primary metric named first.
