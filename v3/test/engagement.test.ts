@@ -18,8 +18,10 @@ const post = (body: unknown) =>
     body: typeof body === "string" ? body : JSON.stringify(body),
   });
 
+const db = () => (env as unknown as { DB: D1Database }).DB;
+
 const countOf = async (event: string, product = "v3") => {
-  const row = await (env as any).DB.prepare(
+  const row = await db().prepare(
     "SELECT count FROM engagement_daily WHERE day = ?1 AND event = ?2 AND product = ?3",
   ).bind(dayOf(), event, product).first<{ count: number }>();
   return row?.count ?? 0;
