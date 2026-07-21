@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>The Wire — Scorecard (dev)</title>
+<style>
+  :root { --bg:#0e0f12; --panel:#16181d; --ink:#e8e6e1; --dim:#9a968e; --line:#262930;
+    --accent:#d4a24e; --good:#5aa469; --bad:#c0564e; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink);
+    font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
+  header { padding:18px; border-bottom:1px solid var(--line); }
+  h1 { margin:0 0 4px; font-size:20px; letter-spacing:.04em; }
+  .sub { color:var(--dim); font-size:13px; }
+  main { max-width:900px; margin:0 auto; padding:16px; }
+  .caveat { background:#1c1408; border:1px solid #3a2c10; color:#d8c69a; border-radius:8px;
+    padding:10px 12px; font-size:12.5px; margin-bottom:16px; }
+  section { background:var(--panel); border:1px solid var(--line); border-radius:10px;
+    padding:14px 16px; margin:12px 0; overflow-x:auto; }
+  h2 { margin:0 0 10px; font-size:15px; color:var(--accent); }
+  table { border-collapse:collapse; width:100%; font-variant-numeric:tabular-nums; }
+  th, td { text-align:right; padding:3px 8px; font-size:12.5px; border-bottom:1px solid var(--line); }
+  th:first-child, td:first-child { text-align:left; }
+  th { color:var(--dim); font-weight:600; }
+  td.zero { color:#3c4049; }
+  td.total { color:var(--accent); font-weight:600; }
+  #empty,#err { text-align:center; color:var(--dim); padding:60px 20px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Scorecard <span class="sub">· dev</span></h1>
+  <div class="sub" id="sub">last 14 days, engagement_daily rollup · counts, not rates</div>
+</header>
+<main id="main"><div id="empty">loading…</div></main>
+<script>
+(() => {
+  "use strict";
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (ch) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
+
+  function table(title, days, rows, keyOf, valOf) {
+    // rows -> matrix keyed [key][day]
+    const keys = [...new Set(rows.map(keyOf))];
+    const byKey = {};
+    for (const r of rows) {
+      const k = keyOf(r);
+      (byKey[k] = byKey[k] || {})[r.day] = (byKey[k][r.day] || 0) + valOf(r);
+    }
+    const head = "<tr><th>" + esc(title) + "</th>"
+      + days.map((d) => `<th>${esc(d.slice(5))}</th>`).join("") + "<th>total</th></tr>";
+    const body = keys.map((k) => {
+      let total = 0;
+      const cells = days.map((d) => {
+        const v = byKey[k][d] || 0;
+        total += v;
+        return `<td class="${v ? "" : "zero"}">${v || "·"}</td>`;
+      }).join("");
+      return `<tr><td>${esc(k)}</td>${cells}<td class="total">${total}</td></tr>`;
+    }).join("");
+    return `<section><h2>${esc(title)}</h2><table>${head}${body}</table></section>`;
+  }
+
+  async function load() {
+    let res;
+    try { res = await fetch("/api/dev/scorecard"); } catch { res = null; }
+    if (!res || res.status === 401) {
+      $("main").innerHTML = '<div id="err">Sign in on the <a href="/" style="color:var(--accent)">reader</a> first, then come back.</div>';
+      return;
+    }
+    if (!res.ok) { $("main").innerHTML = '<div id="err">scorecard unavailable</div>'; return; }
+    const data = await res.json();
+    const days = [...new Set([
+      ...data.days.map((r) => r.day),
+      ...data.ledger.map((r) => r.day),
+    ])].sort().slice(-14);
+    if (!days.length) {
+      $("main").innerHTML = '<div id="empty">No events yet. Open the reader, click a story, come back.</div>';
+      return;
+    }
+    const products = [...new Set(data.days.map((r) => r.product))];
+    let html = '<div class="caveat">Small denominators lie: twenty readers make noisy weeks. '
+      + 'Read counts alongside rates, and resist redesigning on one bad row (V3_IDEAS_PLAN, risks).</div>';
+    for (const p of products) {
+      html += table(`events · ${p}`, days, data.days.filter((r) => r.product === p),
+        (r) => r.event, (r) => r.count);
+    }
+    html += table("read_ledger states", days, data.ledger, (r) => r.state, (r) => r.count);
+    $("main").innerHTML = html;
+  }
+
+  load();
+})();
+</script>
+</body>
+</html>

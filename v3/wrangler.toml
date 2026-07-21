@@ -40,6 +40,12 @@ binding = "CF_VERSION_METADATA"
 binding = "SPEND"
 dataset = "wire_spend"
 
+# Engagement scorecard raw points (V3_IDEAS_PLAN). 90-day retention; the
+# permanent rollup is the engagement_daily table in D1 (migration 0004).
+[[analytics_engine_datasets]]
+binding = "ENGAGE"
+dataset = "wire_engagement"
+
 # Workers AI: bge-m3 embeddings at ingest (~4.3 of 10,000 free neurons/day).
 # Code treats the binding as optional — absence degrades clustering, never
 # blocks an edition.
@@ -114,6 +120,10 @@ bucket_name = "wire-backups"
 [[env.test.analytics_engine_datasets]]
 binding = "SPEND"
 dataset = "wire_spend"
+
+[[env.test.analytics_engine_datasets]]
+binding = "ENGAGE"
+dataset = "wire_engagement"
 
 [env.test.version_metadata]
 binding = "CF_VERSION_METADATA"

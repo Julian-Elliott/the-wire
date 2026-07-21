@@ -113,6 +113,23 @@
     }, () => { $("stamp").textContent = "location permission declined"; });
   }
 
+  // Scorecard events (V3_IDEAS_PLAN): counts only, works signed-out, and a
+  // failed beacon never affects the reader.
+  let editionCounted = false;
+  function sendEvent(event) {
+    try {
+      const body = JSON.stringify({ event });
+      const ok = navigator.sendBeacon
+        && navigator.sendBeacon("/api/event", new Blob([body], { type: "application/json" }));
+      if (!ok) {
+        fetch("/api/event", {
+          method: "POST", body, keepalive: true,
+          headers: { "content-type": "application/json" },
+        }).catch(() => {});
+      }
+    } catch { /* telemetry, never load-bearing */ }
+  }
+
   function markRead(item) {
     if (!signedIn) return;
     fetch("/api/read", {
@@ -178,6 +195,10 @@
         : "no edition yet";
       renderDesks();
       renderFeed();
+      if (!editionCounted && items.length) {
+        editionCounted = true;
+        sendEvent("edition_opened");
+      }
     } catch {
       $("stamp").textContent = "offline — retrying";
     }
@@ -197,6 +218,7 @@
     if (!a) return;
     const item = items.find((i) => i.url === a.getAttribute("href"));
     if (item) markRead(item);
+    sendEvent("linkout_opened");
   });
 
   whoami();

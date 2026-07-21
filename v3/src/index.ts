@@ -13,6 +13,9 @@ import { SUMMARY_MAX, TITLE_STORE_MAX, URL_STORE_MAX, cleanDeskId } from "./lib/
 import { embedTexts, embeddingInput } from "./lib/embed";
 import { canonHost, canonUrl } from "./lib/urls";
 import { validateBatch, type IngestItem } from "./lib/validate";
+import {
+  ENGAGEMENT_EVENTS, PRODUCTS, isClientEvent, recordEvent, type Product,
+} from "./lib/engage";
 import type { StoredStory } from "./newsroom";
 
 export { NewsroomDO } from "./newsroom";
@@ -711,7 +714,33 @@ app.post("/api/read", async (c) => {
     `INSERT INTO read_ledger (user_id, story_key, state, at) VALUES (?1, ?2, ?3, ?4)
      ON CONFLICT(user_id, story_key) DO UPDATE SET state = excluded.state, at = excluded.at`,
   ).bind(sess.uid, key, state, new Date().toISOString()).run();
+  // Scorecard: read/dismissed are server-owned engagement events, derived
+  // here so the ledger stays the single source of truth (V3_IDEAS_PLAN).
+  if (state === "read" || state === "dismissed") {
+    await recordEvent(c.env, state === "read" ? "story_read" : "story_dismissed");
+  }
   return c.json({ ok: true, key, state });
+});
+
+// Engagement events (V3_IDEAS_PLAN scorecard). Anonymous by design: the
+// scorecard needs pre-sign-in behaviour (search onboarding, link-outs), and
+// this path stores counts only, no identifier. story_read/story_dismissed
+// are refused here; they are derived from /api/read above.
+app.post("/api/event", async (c) => {
+  const bodyText = await readBodyBounded(c.req.raw, 4 * 1024);
+  if (bodyText === null) return c.json({ ok: false, error: "payload too large" }, 413);
+  let p: { event?: string; product?: string };
+  try {
+    p = JSON.parse(bodyText);
+  } catch {
+    return c.json({ ok: false, error: "invalid JSON" }, 400);
+  }
+  if (!isClientEvent(p.event)) return c.json({ ok: false, error: "unknown event" }, 400);
+  const product: Product = (PRODUCTS as readonly string[]).includes(String(p.product))
+    ? (p.product as Product)
+    : "v3";
+  await recordEvent(c.env, p.event, product);
+  return c.json({ ok: true });
 });
 
 // Why-demoted notes (V3_BLUEPRINT §5 trust UX): the signed-in reader sees
@@ -990,6 +1019,21 @@ app.get("/api/dev/preference", async (c) => {
 });
 
 // Per-user Persona audit — the signed-in user sees who read what.
+// Scorecard rollup for /dev/scorecard (V3_IDEAS_PLAN). Session-gated like
+// the compass. Last 14 days of engagement_daily, plus read-ledger day counts
+// so depth (read vs dismissed) sits next to the client-sent events.
+app.get("/api/dev/scorecard", async (c) => {
+  const sess = await sessionOf(c);
+  if (!sess) return c.json({ ok: false, error: "sign in required" }, 401);
+  const days = await c.env.DB.prepare(
+    "SELECT day, event, product, count FROM engagement_daily WHERE day >= date('now', '-13 days') ORDER BY day DESC, event",
+  ).all<{ day: string; event: string; product: string; count: number }>();
+  const ledger = await c.env.DB.prepare(
+    "SELECT substr(at, 1, 10) AS day, state, COUNT(*) AS count FROM read_ledger WHERE at >= datetime('now', '-14 days') GROUP BY day, state ORDER BY day DESC",
+  ).all<{ day: string; state: string; count: number }>();
+  return c.json({ ok: true, events: ENGAGEMENT_EVENTS, days: days.results, ledger: ledger.results });
+});
+
 app.get("/api/persona/audit", async (c) => {
   const sess = await sessionOf(c);
   if (!sess) return c.json({ ok: false, error: "sign in required" }, 401);
