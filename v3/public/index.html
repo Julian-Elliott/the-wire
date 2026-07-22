@@ -173,16 +173,27 @@
       const res = await fetch("/api/me/desks");
       const d = await res.json();
       const follows = d.follows || {};
+      const pitches = d.pitches || {};
       const followed = Object.keys(follows).sort();
       const notFollowed = (d.available || []).filter((x) => follows[x] === undefined).sort();
-      const followRow = (desk) => `
+      const PITCH_LABELS = { 0: "Explain it", 1: "Normal", 2: "Insider" };
+      const followRow = (desk) => {
+        const lvl = pitches[desk] ?? 1;
+        return `
         <div class="dp-row">
           <span class="dp-name">${esc(desk)}</span>
           <span class="dp-weights" role="group" aria-label="How much ${esc(desk)} news to show">
             ${[1, 2, 3].map((w) => `<button type="button" class="dp-w" aria-pressed="${follows[desk] === w}" data-desk="${esc(desk)}" data-w="${w}">${WEIGHT_LABELS[w]}</button>`).join("")}
             <button type="button" class="dp-w" data-desk="${esc(desk)}" data-w="0" aria-label="Stop following ${esc(desk)}">Unfollow</button>
           </span>
+        </div>
+        <div class="dp-row" style="padding-top:0">
+          <span class="dp-name" style="font-size:13px;color:var(--dim)">↳ written for me:</span>
+          <span class="dp-weights" role="group" aria-label="How ${esc(desk)} stories are written for me">
+            ${[0, 1, 2].map((lv) => `<button type="button" class="dp-w" aria-pressed="${lvl === lv}" data-desk="${esc(desk)}" data-pitch="${lv}">${PITCH_LABELS[lv]}</button>`).join("")}
+          </span>
         </div>`;
+      };
       const addRow = (desk) => `
         <div class="dp-row">
           <span class="dp-name" style="color:var(--dim)">${esc(desk)}</span>
@@ -199,10 +210,13 @@
       $("dp-close").addEventListener("click", closeDesks);
       panel.querySelectorAll(".dp-w").forEach((b) =>
         b.addEventListener("click", async () => {
+          const payload = b.dataset.pitch !== undefined
+            ? { desk: b.dataset.desk, pitch: Number(b.dataset.pitch) }
+            : { desk: b.dataset.desk, weight: Number(b.dataset.w) };
           try {
             await fetch("/api/me/desks", {
               method: "POST", headers: { "content-type": "application/json" },
-              body: JSON.stringify({ desk: b.dataset.desk, weight: Number(b.dataset.w) }),
+              body: JSON.stringify(payload),
             });
           } catch { /* re-render shows current state anyway */ }
           renderDesksPanel();

@@ -29,6 +29,7 @@ export interface IngestItem {
   publishedAt?: string;
   quote?: string;
   why?: string;
+  pitches?: { explain?: string; insider?: string } | null;
 }
 
 export interface ValidationOutcome {

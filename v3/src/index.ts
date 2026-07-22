@@ -6,6 +6,7 @@ import {
 import {
   PERSONA_TOOLS, verifyPersonaToken, type PersonaClaims,
 } from "./lib/persona-token";
+import { clampPitch, cleanPitches, pickSummary, type PitchLevel } from "./lib/pitch";
 import { analyseDesk, buildCentroid, meanVector, type DeskAnalysis } from "./lib/preference";
 import { rankStories, whyRanked, type RankableStory } from "./lib/rank";
 import { runSignals } from "./signals";
@@ -74,6 +75,8 @@ const profileStub = (env: Env, uid: string) =>
     purge(): Promise<{ ok: true; cleared: string[] }>;
     getFollows(): Promise<Record<string, number>>;
     setFollow(desk: string, weight: number): Promise<Record<string, number>>;
+    getPitches(): Promise<Record<string, number>>;
+    setPitch(desk: string, level: number): Promise<Record<string, number>>;
   };
 
 // Worker-originated phone alert (RUNBOOK §2). Fire-and-forget, never throws.
@@ -248,6 +251,7 @@ function sanitise(raw: unknown): IngestItem | null {
     priority: pr === 3 ? 3 : pr === 2 ? 2 : 1,
     publishedAt: r.publishedAt ? String(r.publishedAt).slice(0, 40) : undefined,
     quote: r.quote ? cleanText(String(r.quote)).trim().slice(0, 500) : undefined,
+    pitches: cleanPitches(r.pitches, cleanText, SUMMARY_MAX),
   };
 }
 
@@ -359,6 +363,7 @@ app.post("/api/ingest", async (c) => {
         quote: it.quote ?? null,
         editorial_read: editorialRead,
         added_at: nowIso,
+        pitches: it.pitches ?? null,
       };
     }),
   );
@@ -520,9 +525,11 @@ app.get("/api/feed/latest", async (c) => {
   // order. Priority-3 (interrupt-tier) stories always float to the very top —
   // urgency outranks taste. Every item carries its "why you're seeing this".
   const nr = c.env.NEWSROOM.get(c.env.NEWSROOM.idFromName("main")) as unknown as NewsroomEmbeds;
-  const [withVecs, follows] = await Promise.all([
+  const pstub = profileStub(c.env, sess.uid);
+  const [withVecs, follows, pitchPrefs] = await Promise.all([
     nr.feedWithEmbeddings(Math.max(n, 100)),
-    profileStub(c.env, sess.uid).getFollows(),
+    pstub.getFollows(),
+    pstub.getPitches(),
   ]);
   const vecById = new Map(withVecs.map((r) => [r.story_id, r.vec]));
   const model = await buildUserModel(
@@ -567,12 +574,17 @@ app.get("/api/feed/latest", async (c) => {
     ok: true,
     ranked: true,
     count: ranked.length,
-    items: ranked.slice(0, n).map((r) =>
-      shape(r.story.src, {
+    items: ranked.slice(0, n).map((r) => {
+      // Pitch each story to the user's level for its desk (Explain / Normal /
+      // Insider), falling back to the plain summary when a level is absent.
+      const level = clampPitch(pitchPrefs[r.story.desk] ?? 1);
+      return shape(r.story.src, {
+        summary: pickSummary(r.story.src, level),
+        pitch: level as PitchLevel,
         rankScore: Math.round(r.score * 1000) / 1000,
         rankWhy: whyRanked(r.components, r.story.desk),
-      }),
-    ),
+      });
+    }),
   });
 });
 
@@ -751,10 +763,14 @@ app.post("/auth/apple/events", async (c) => {
 app.get("/api/me/desks", async (c) => {
   const sess = await sessionOf(c);
   if (!sess) return c.json({ ok: false, error: "sign in required" }, 401);
-  const follows = await profileStub(c.env, sess.uid).getFollows();
-  const feed = await newsroom(c.env).feed(200, sess.uid);
+  const stub = profileStub(c.env, sess.uid);
+  const [follows, pitches, feed] = await Promise.all([
+    stub.getFollows(),
+    stub.getPitches(),
+    newsroom(c.env).feed(200, sess.uid),
+  ]);
   const available = [...new Set(feed.map((s) => s.desk))].sort();
-  return c.json({ ok: true, follows, available });
+  return c.json({ ok: true, follows, pitches, available });
 });
 
 app.post("/api/me/desks", async (c) => {
@@ -762,7 +778,7 @@ app.post("/api/me/desks", async (c) => {
   if (!sess) return c.json({ ok: false, error: "sign in required" }, 401);
   const bodyText = await readBodyBounded(c.req.raw, 4 * 1024);
   if (bodyText === null) return c.json({ ok: false }, 413);
-  let p: { desk?: string; weight?: number };
+  let p: { desk?: string; weight?: number; pitch?: number };
   try {
     p = JSON.parse(bodyText);
   } catch {
@@ -770,8 +786,11 @@ app.post("/api/me/desks", async (c) => {
   }
   const desk = cleanDeskId(p.desk);
   if (!desk) return c.json({ ok: false, error: "bad desk" }, 400);
-  const follows = await profileStub(c.env, sess.uid).setFollow(desk, Number(p.weight) || 0);
-  return c.json({ ok: true, follows });
+  const stub = profileStub(c.env, sess.uid);
+  // A request sets the weight, the pitch, or both.
+  const follows = p.weight !== undefined ? await stub.setFollow(desk, Number(p.weight) || 0) : await stub.getFollows();
+  const pitches = p.pitch !== undefined ? await stub.setPitch(desk, Number(p.pitch)) : await stub.getPitches();
+  return c.json({ ok: true, follows, pitches });
 });
 
 // ---- Web Push (personas' #2: reach every user, not just ntfy) --------------

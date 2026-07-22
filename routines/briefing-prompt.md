@@ -73,6 +73,17 @@ Rules for every item:
   opinion/comment columns, culture-war or outrage pieces, ragebait, clickbait,
   rumour-mill churn, and anything that's mostly someone whinging. No ads.
 - `summary` ≤ 24 words. `why` = why this reader should care.
+- `pitches` (v3): the SAME story written at two other expertise levels, so each
+  reader can pick how it's told. Include a `pitches` object with two keys:
+  - `explain` — for a NEWCOMER who knows nothing about this desk. Plain, warm,
+    reading-age ~8: short words, short sentences, spell out any jargon or names,
+    say why it matters in everyday terms. ~24 to 36 words.
+  - `insider` — for an EXPERT who follows this desk closely. Terse, assumes the
+    background, skips the explainer, gets straight to the new bit (for a
+    football fan: the banter and the done-deal detail, not "why this signing
+    matters"). ~18 to 28 words.
+  The top-level `summary` stays the middle "normal" level. All three are the
+  same facts, only the telling changes. House style applies to all of them.
 - `readout` = a longer-form spoken version for the desk's audio "listen" button:
   **3 to 6 natural sentences** (~60 to 120 words) that a presenter would read
   aloud, the story with a bit more context and the so-what, in plain spoken
@@ -114,7 +125,7 @@ personalised `podcast` for that reader (see the `podcast` section below).
 {
   "fixture": "Liverpool vs Arsenal, Sat, 17:30",
   "items": [
-    { "category": "liverpool", "title": "...", "summary": "<=24 words", "why": "why a fan cares", "readout": "3-6 spoken sentences", "contentType": "News", "source": "BBC Sport", "url": "https://...", "publishedAt": "2026-06-28", "salience": 4 },
+    { "category": "liverpool", "title": "...", "summary": "<=24 words", "pitches": { "explain": "newcomer version, plain, reading-age 8", "insider": "expert version, terse, straight to the new bit" }, "why": "why a fan cares", "readout": "3-6 spoken sentences", "contentType": "News", "source": "BBC Sport", "url": "https://...", "publishedAt": "2026-06-28", "salience": 4 },
     { "category": "markets", "title": "FTSE 100", "direction": "down", "changePct": "-0.6%", "summary": "...", "why": "the real reason it moved", "readout": "...", "contentType": "Index move", "source": "Reuters", "url": "https://...", "publishedAt": "2026-06-28", "salience": 3 }
   ],
   "podcast": [

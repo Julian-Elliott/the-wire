@@ -32,6 +32,8 @@ export interface StoredStory {
   quote: string | null;
   editorial_read: string | null;
   added_at: string;
+  // Pitch-level summaries: JSON { explain?, insider? }; null = summary only.
+  pitches?: { explain?: string; insider?: string } | null;
   // uid-scoped story (a per-user trigger, e.g. "planning app near YOUR
   // home"); null/absent = visible to everyone. Scoped stories never enter
   // the anonymous feed — one user's local story must not leak their area.
@@ -122,6 +124,11 @@ export class NewsroomDO extends DurableObject<Env> {
       if (!cols2.includes("audience")) {
         ctx.storage.sql.exec("ALTER TABLE stories ADD COLUMN audience TEXT");
       }
+      if (!cols2.includes("pitches")) {
+        // JSON { explain?, insider? } — pitch-level summaries (level 1 is the
+        // plain `summary`). Absent = fall back to the summary.
+        ctx.storage.sql.exec("ALTER TABLE stories ADD COLUMN pitches TEXT");
+      }
     });
   }
 
@@ -158,11 +165,12 @@ export class NewsroomDO extends DurableObject<Env> {
       const res = this.ctx.storage.sql.exec(
         `INSERT OR IGNORE INTO stories
            (story_id, saga_id, desk, title, summary, why, url, canon_url, title_key, sources,
-            salience, priority, published_at, quote, editorial_read, added_at, embedding, audience)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+            salience, priority, published_at, quote, editorial_read, added_at, embedding, audience, pitches)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
         r.story_id, sagaId, r.desk, r.title, r.summary, r.why, r.url, r.canon_url, r.title_key,
         JSON.stringify(r.sources ?? []), r.salience, r.priority, r.published_at,
         r.quote, r.editorial_read, r.added_at, vec ? vecToBlob(vec) : null, r.audience ?? null,
+        r.pitches ? JSON.stringify(r.pitches) : null,
       );
       if (res.rowsWritten > 0) {
         inserted++;
@@ -227,10 +235,11 @@ export class NewsroomDO extends DurableObject<Env> {
     limit = 50,
     uid: string | null = null,
   ): Promise<(Omit<StoredStory, "embedding"> & { saga_id: string | null })[]> {
-    type Row = Omit<StoredStory, "sources" | "embedding"> & {
+    type Row = Omit<StoredStory, "sources" | "embedding" | "pitches"> & {
       sources: string;
       saga_id: string | null;
       embedding: ArrayBuffer | null;
+      pitches: string | null;
     };
     const rows = this.ctx.storage.sql
       .exec<Row>(
@@ -239,9 +248,10 @@ export class NewsroomDO extends DurableObject<Env> {
         Math.min(Math.max(1, limit), 200),
       )
       .toArray();
-    return rows.map(({ embedding: _e, ...r }) => ({
+    return rows.map(({ embedding: _e, pitches, ...r }) => ({
       ...r,
       sources: JSON.parse(r.sources || "[]") as string[],
+      pitches: pitches ? (JSON.parse(pitches) as { explain?: string; insider?: string }) : null,
     }));
   }
 

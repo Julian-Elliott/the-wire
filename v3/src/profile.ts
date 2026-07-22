@@ -353,6 +353,35 @@ export class ProfileDO extends DurableObject<Env> {
     return f;
   }
 
+  // ---- Pitch level per desk (0 Explain / 1 Normal / 2 Insider) -------------
+  // How each desk's stories are written FOR this user. Default (absent) = 1.
+  async getPitches(): Promise<Record<string, number>> {
+    const row = this.ctx.storage.sql
+      .exec<{ value: string }>("SELECT value FROM meta WHERE key = 'pitches'")
+      .toArray()[0];
+    if (!row) return {};
+    try {
+      const p = JSON.parse(row.value);
+      return p && typeof p === "object" ? p : {};
+    } catch {
+      return {};
+    }
+  }
+
+  async setPitch(desk: string, level: number): Promise<Record<string, number>> {
+    const key = String(desk).replace(/[^A-Za-z0-9_-]/g, "").slice(0, 40);
+    const p = await this.getPitches();
+    if (!key) return p;
+    const lvl = level === 0 ? 0 : level === 2 ? 2 : 1;
+    if (lvl === 1) delete p[key]; // 1 is the default — store only deviations
+    else p[key] = lvl;
+    this.ctx.storage.sql.exec(
+      "INSERT INTO meta (key, value) VALUES ('pitches', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+      JSON.stringify(p),
+    );
+    return p;
+  }
+
   // Nightly NDJSON sweep (RUNBOOK §4): DO-SQLite has no platform export, so
   // the DO serialises its own tables to the backups bucket. One line per
   // row: {"table": ..., "row": {...}}.
