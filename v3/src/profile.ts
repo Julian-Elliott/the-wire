@@ -300,6 +300,59 @@ export class ProfileDO extends DurableObject<Env> {
     return { name: meta.get("name") ?? null, config };
   }
 
+  // ---- Explicit follows (the reader's follow-picker) ------------------------
+  // A user's chosen desks + weights, stored as meta['follows'] JSON
+  // { desk: weight 1..3 }. Distinct from the DECAYED behavioural desk.weight
+  // traits: follows are durable user INTENT and never decay. Seeded once from
+  // the migrated v2 enabled-desks so an existing user's choices carry over.
+  private readFollows(): Record<string, number> | null {
+    const row = this.ctx.storage.sql
+      .exec<{ value: string }>("SELECT value FROM meta WHERE key = 'follows'")
+      .toArray()[0];
+    if (!row) return null;
+    try {
+      const f = JSON.parse(row.value);
+      return f && typeof f === "object" ? f : {};
+    } catch {
+      return {};
+    }
+  }
+
+  private writeFollows(f: Record<string, number>): void {
+    this.ctx.storage.sql.exec(
+      "INSERT INTO meta (key, value) VALUES ('follows', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+      JSON.stringify(f),
+    );
+  }
+
+  async getFollows(): Promise<Record<string, number>> {
+    const existing = this.readFollows();
+    if (existing) return existing;
+    // Lazy seed from the migrated v2 config's enabled desks (weight 1 each).
+    const cfg = (await this.getConfig()).config as
+      | { desks?: { enabled?: unknown } }
+      | null;
+    const enabled = Array.isArray(cfg?.desks?.enabled) ? (cfg!.desks!.enabled as unknown[]) : [];
+    const seeded: Record<string, number> = {};
+    for (const d of enabled) {
+      const key = String(d).replace(/[^A-Za-z0-9_-]/g, "").slice(0, 40);
+      if (key) seeded[key] = 1;
+    }
+    this.writeFollows(seeded);
+    return seeded;
+  }
+
+  // weight 0 (or absent) = unfollow/remove; 1..3 = follow strength.
+  async setFollow(desk: string, weight: number): Promise<Record<string, number>> {
+    const key = String(desk).replace(/[^A-Za-z0-9_-]/g, "").slice(0, 40);
+    const f = await this.getFollows();
+    if (!key) return f;
+    if (weight <= 0) delete f[key];
+    else f[key] = Math.min(3, Math.max(1, Math.round(weight)));
+    this.writeFollows(f);
+    return f;
+  }
+
   // Nightly NDJSON sweep (RUNBOOK §4): DO-SQLite has no platform export, so
   // the DO serialises its own tables to the backups bucket. One line per
   // row: {"table": ..., "row": {...}}.

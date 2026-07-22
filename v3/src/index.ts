@@ -72,6 +72,8 @@ const profileStub = (env: Env, uid: string) =>
     recordSignal(sig: { sourceApp: string; type: string; entity?: string; value?: string }): Promise<{ accepted: boolean; affectedTraits: string[] }>;
     recordAudit(client: string, tool: string): Promise<void>;
     purge(): Promise<{ ok: true; cleared: string[] }>;
+    getFollows(): Promise<Record<string, number>>;
+    setFollow(desk: string, weight: number): Promise<Record<string, number>>;
   };
 
 // Worker-originated phone alert (RUNBOOK §2). Fire-and-forget, never throws.
@@ -518,14 +520,26 @@ app.get("/api/feed/latest", async (c) => {
   // order. Priority-3 (interrupt-tier) stories always float to the very top —
   // urgency outranks taste. Every item carries its "why you're seeing this".
   const nr = c.env.NEWSROOM.get(c.env.NEWSROOM.idFromName("main")) as unknown as NewsroomEmbeds;
-  const withVecs = await nr.feedWithEmbeddings(Math.max(n, 100));
+  const [withVecs, follows] = await Promise.all([
+    nr.feedWithEmbeddings(Math.max(n, 100)),
+    profileStub(c.env, sess.uid).getFollows(),
+  ]);
   const vecById = new Map(withVecs.map((r) => [r.story_id, r.vec]));
   const model = await buildUserModel(
     c.env, sess.uid,
     withVecs.map((r) => ({ story_id: r.story_id, desk: r.desk, vec: r.vec })),
   );
 
-  const rankable: (RankableStory & { src: (typeof items)[number] })[] = items.map((s) => ({
+  // Explicit follows take precedence over behavioural weights. If the user
+  // has chosen ANY follows, unfollowed desks are hidden — "pick what you
+  // follow" genuinely filters (priority-3 always survives; urgency ignores
+  // follows). No follows set = show everything on the migrated weights.
+  const hasFollows = Object.keys(follows).length > 0;
+  const visible = hasFollows
+    ? items.filter((s) => s.priority === 3 || follows[s.desk] !== undefined)
+    : items;
+
+  const rankable: (RankableStory & { src: (typeof items)[number] })[] = visible.map((s) => ({
     id: s.story_id,
     desk: s.desk,
     salience: s.salience,
@@ -536,7 +550,7 @@ app.get("/api/feed/latest", async (c) => {
 
   const ctx = {
     nowMs: Date.now(),
-    deskWeight: (d: string) => model.weightByDesk.get(d) ?? 1,
+    deskWeight: (d: string) => follows[d] ?? model.weightByDesk.get(d) ?? 1,
     deskCentroid: (d: string) => model.centroidByDesk.get(d) ?? null,
     corpusMean: model.corpusMean,
   };
@@ -728,6 +742,36 @@ app.post("/auth/apple/events", async (c) => {
     );
   }
   return c.json({ ok: true, received: type });
+});
+
+// ---- Follow-picker (the reader's "pick what you follow") -------------------
+// Your chosen desks + weights. GET returns your follows plus the desks
+// currently in the edition (so the reader can offer them to add). POST sets
+// or removes one follow; the feed re-ranks immediately.
+app.get("/api/me/desks", async (c) => {
+  const sess = await sessionOf(c);
+  if (!sess) return c.json({ ok: false, error: "sign in required" }, 401);
+  const follows = await profileStub(c.env, sess.uid).getFollows();
+  const feed = await newsroom(c.env).feed(200, sess.uid);
+  const available = [...new Set(feed.map((s) => s.desk))].sort();
+  return c.json({ ok: true, follows, available });
+});
+
+app.post("/api/me/desks", async (c) => {
+  const sess = await sessionOf(c);
+  if (!sess) return c.json({ ok: false, error: "sign in required" }, 401);
+  const bodyText = await readBodyBounded(c.req.raw, 4 * 1024);
+  if (bodyText === null) return c.json({ ok: false }, 413);
+  let p: { desk?: string; weight?: number };
+  try {
+    p = JSON.parse(bodyText);
+  } catch {
+    return c.json({ ok: false, error: "invalid JSON" }, 400);
+  }
+  const desk = cleanDeskId(p.desk);
+  if (!desk) return c.json({ ok: false, error: "bad desk" }, 400);
+  const follows = await profileStub(c.env, sess.uid).setFollow(desk, Number(p.weight) || 0);
+  return c.json({ ok: true, follows });
 });
 
 // ---- Web Push (personas' #2: reach every user, not just ntfy) --------------
