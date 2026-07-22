@@ -104,6 +104,7 @@
   "use strict";
   const $ = (id) => document.getElementById(id);
   let items = [];
+  let currentItems = []; // whatever is rendered in #feed now (full feed or catch-up)
   let deskFilter = null;
   let signedIn = false;
   let held = {}; // story_id -> "why held back" note (trust UX, §5)
@@ -136,7 +137,8 @@
         const me = await res.json();
         signedIn = true;
         $("account").innerHTML =
-          `<span aria-hidden="true" style="color:var(--dim);font-size:14px">${esc(me.name || "Signed in")}</span>` +
+          `<span aria-hidden="true" style="color:var(--dim);font-size:13px">${esc(me.name || "Signed in")}</span>` +
+          ctlButton("catchupbtn", "Your finite catch-up edition", "☕ Catch-up") +
           ctlButton("desksbtn", "Choose the topics you follow", "⚙ Topics") +
           ctlButton("alerts", "Turn on urgent alerts for this device", "🔔 Alerts") +
           ctlButton("setarea", "Set your home area for local alerts", "📍 Area") +
@@ -144,11 +146,56 @@
         $("setarea").addEventListener("click", setHomeArea);
         $("alerts").addEventListener("click", enablePush);
         $("desksbtn").addEventListener("click", toggleDesks);
+        $("catchupbtn").addEventListener("click", loadCatchup);
         loadDemotions();
       } else {
         $("account").innerHTML = `<a class="ctl" href="/auth/apple/login" style="border-color:var(--accent);color:var(--accent)">Sign in with Apple</a>`;
       }
     } catch { /* header stays quiet */ }
+  }
+
+  // Catch-up: the edition that ENDS. A finite, capped set of what mattered
+  // since you last caught up, closing with a clear "you're all caught up".
+  let catchupNewest = null;
+  async function loadCatchup(e) {
+    if (e) e.preventDefault();
+    say("Loading your catch-up…");
+    try {
+      const data = await (await fetch("/api/feed/catchup")).json();
+      if (!data.ok) { say("Sign in to use catch-up."); return; }
+      $("desks").innerHTML = ""; // hide topic filters in catch-up
+      if (data.caughtUp) {
+        catchupNewest = null;
+        const since = data.since ? new Date(data.since).toLocaleString("en-GB", { weekday: "short", hour: "2-digit", minute: "2-digit" }) : null;
+        $("feed").innerHTML = `<div id="empty"><p class="big">You're all caught up ✓</p>
+          <p>${since ? "Nothing new since " + esc(since) + "." : "No stories yet."} Come back later — there's no more to scroll.</p>
+          <p><button type="button" class="ctl" id="backfull" style="margin-top:10px">Browse the full feed</button></p></div>`;
+        $("backfull").addEventListener("click", load);
+        say("You're all caught up");
+        return;
+      }
+      catchupNewest = data.items[0] ? data.items[0].addedAt : null;
+      currentItems = data.items;
+      const cards = data.items.map(renderCard).join("");
+      const end = `<li><div id="empty" style="padding:34px 20px">
+        <p class="big">That's your catch-up ✓</p>
+        <p>${data.count} ${data.count === 1 ? "story" : "stories"} that mattered${data.remaining ? " · " + data.remaining + " more if you want them" : ""}. You're done — no infinite scroll here.</p>
+        <p><button type="button" class="ctl" id="markdone" style="margin-top:10px;border-color:var(--accent);color:var(--accent)">Mark as done</button>
+        <button type="button" class="ctl" id="backfull" style="margin-top:10px">Full feed</button></p></div></li>`;
+      $("feed").innerHTML = `<ol class="feed-list">` + cards + end + `</ol>`;
+      $("markdone").addEventListener("click", markCaughtUp);
+      $("backfull").addEventListener("click", load);
+      say(`Catch-up · ${data.count} ${data.count === 1 ? "story" : "stories"}`);
+    } catch { say("Could not load catch-up. Please try again."); }
+  }
+  async function markCaughtUp() {
+    try {
+      await fetch("/api/feed/catchup/done", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ newestAt: catchupNewest }),
+      });
+    } catch { /* still show the caught-up state */ }
+    loadCatchup();
   }
 
   // Follow-picker: choose which topics you follow and how strongly.
@@ -306,14 +353,9 @@
     $("desks").innerHTML = [btn("", "All topics")].concat(desks.map((d) => btn(d, d))).join("");
   }
 
-  function renderFeed() {
-    const list = deskFilter ? items.filter((i) => i.desk === deskFilter) : items;
-    if (!list.length) {
-      $("feed").innerHTML = `<div id="empty"><p class="big">No stories yet</p>
-        <p>The newsroom is running. New stories arrive a few times a day — check back soon.</p></div>`;
-      return;
-    }
-    $("feed").innerHTML = `<ol class="feed-list">` + list.map((i) => `
+  // One story card (shared by the full feed and the Catch-up edition).
+  function renderCard(i) {
+    return `
       <li><article class="${i.priority === 3 ? "p3" : ""}"${i.priority === 3 ? ' aria-label="Urgent"' : ""}>
         <p class="meta">
           <span class="desk">${esc(i.desk)}</span>
@@ -328,13 +370,24 @@
         ${i.why ? `<p class="why">Why it matters: ${esc(i.why)}</p>` : ""}
         ${held[i.id] ? `<p class="held">Held back from an alert — ${esc(held[i.id])}</p>` : ""}
         ${i.quote ? `<blockquote>“${esc(i.quote)}”</blockquote>` : ""}
-      </article></li>`).join("") + `</ol>`;
+      </article></li>`;
+  }
+
+  function renderFeed() {
+    const list = deskFilter ? items.filter((i) => i.desk === deskFilter) : items;
+    if (!list.length) {
+      $("feed").innerHTML = `<div id="empty"><p class="big">No stories yet</p>
+        <p>The newsroom is running. New stories arrive a few times a day — check back soon.</p></div>`;
+      return;
+    }
+    $("feed").innerHTML = `<ol class="feed-list">` + list.map(renderCard).join("") + `</ol>`;
   }
 
   async function load() {
     try {
       const data = await (await fetch("/api/feed/latest?limit=100")).json();
       items = data.items ?? [];
+      currentItems = items;
       const when = new Date().toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
       say(items.length
         ? `${items.length} stories${data.ranked ? ", chosen for you" : ""} · updated ${when}`
@@ -363,7 +416,7 @@
   $("feed").addEventListener("click", (e) => {
     const a = e.target.closest("h2 a");
     if (!a) return;
-    const item = items.find((i) => i.url === a.getAttribute("href"));
+    const item = currentItems.find((i) => i.url === a.getAttribute("href"));
     if (item) markRead(item);
     sendEvent("linkout_opened");
   });

@@ -77,6 +77,8 @@ const profileStub = (env: Env, uid: string) =>
     setFollow(desk: string, weight: number): Promise<Record<string, number>>;
     getPitches(): Promise<Record<string, number>>;
     setPitch(desk: string, level: number): Promise<Record<string, number>>;
+    getCatchupAt(): Promise<string | null>;
+    setCatchupAt(iso: string): Promise<void>;
   };
 
 // Worker-originated phone alert (RUNBOOK §2). Fire-and-forget, never throws.
@@ -501,55 +503,38 @@ app.get("/api/admin/profile", async (c) => {
   });
 });
 
-app.get("/api/feed/latest", async (c) => {
-  const limit = Number(c.req.query("limit") ?? 50);
-  const n = Number.isFinite(limit) ? limit : 50;
-  // Anonymous callers get global stories only; a session additionally
-  // unlocks stories scoped to that user (per-user triggers, §7).
-  const sess = await sessionOf(c);
-  const items = await newsroom(c.env).feed(n, sess?.uid ?? null);
+type FeedRow = Awaited<ReturnType<ReturnType<typeof newsroom>["feed"]>>[number];
 
-  const shape = (s: (typeof items)[number], extra: Record<string, unknown> = {}) => ({
-    id: s.story_id, saga: s.saga_id, desk: s.desk, title: s.title, summary: s.summary,
-    why: s.why, url: s.url, sources: s.sources, salience: s.salience, priority: s.priority,
-    quote: s.quote, publishedAt: s.published_at, addedAt: s.added_at, ...extra,
-  });
+const shapeStory = (s: FeedRow, extra: Record<string, unknown> = {}) => ({
+  id: s.story_id, saga: s.saga_id, desk: s.desk, title: s.title, summary: s.summary,
+  why: s.why, url: s.url, sources: s.sources, salience: s.salience, priority: s.priority,
+  quote: s.quote, publishedAt: s.published_at, addedAt: s.added_at, ...extra,
+});
 
-  // Signed-out (or opt-out via ?order=latest): chronological, as before.
-  if (!sess || c.req.query("order") === "latest") {
-    return c.json({ ok: true, ranked: false, count: items.length, items: items.map((s) => shape(s)) });
-  }
-
-  // RANKED ASSEMBLY (V3_BLUEPRINT §3 L4, LLM-free): desk weight × salience ×
-  // recency × trait affinity. The vectors the compass proved out now decide
-  // order. Priority-3 (interrupt-tier) stories always float to the very top —
-  // urgency outranks taste. Every item carries its "why you're seeing this".
-  const nr = c.env.NEWSROOM.get(c.env.NEWSROOM.idFromName("main")) as unknown as NewsroomEmbeds;
-  const pstub = profileStub(c.env, sess.uid);
+// The user's ranked + pitched edition, newest-first within score, priority-3
+// floated to the top. Shared by /api/feed/latest and the Catch-up edition.
+// LLM-free (V3_BLUEPRINT §3 L4).
+async function rankedForUser(
+  env: Env, uid: string, poolLimit: number,
+): Promise<ReturnType<typeof shapeStory>[]> {
+  const items = await newsroom(env).feed(poolLimit, uid);
+  const nr = env.NEWSROOM.get(env.NEWSROOM.idFromName("main")) as unknown as NewsroomEmbeds;
+  const pstub = profileStub(env, uid);
   const [withVecs, follows, pitchPrefs] = await Promise.all([
-    nr.feedWithEmbeddings(Math.max(n, 100)),
+    nr.feedWithEmbeddings(Math.max(poolLimit, 100)),
     pstub.getFollows(),
     pstub.getPitches(),
   ]);
   const vecById = new Map(withVecs.map((r) => [r.story_id, r.vec]));
-  const model = await buildUserModel(
-    c.env, sess.uid,
-    withVecs.map((r) => ({ story_id: r.story_id, desk: r.desk, vec: r.vec })),
-  );
+  const model = await buildUserModel(env, uid, withVecs.map((r) => ({ story_id: r.story_id, desk: r.desk, vec: r.vec })));
 
-  // Explicit follows take precedence over behavioural weights. If the user
-  // has chosen ANY follows, unfollowed desks are hidden — "pick what you
-  // follow" genuinely filters (priority-3 always survives; urgency ignores
-  // follows). No follows set = show everything on the migrated weights.
   const hasFollows = Object.keys(follows).length > 0;
   const visible = hasFollows
     ? items.filter((s) => s.priority === 3 || follows[s.desk] !== undefined)
     : items;
 
-  const rankable: (RankableStory & { src: (typeof items)[number] })[] = visible.map((s) => ({
-    id: s.story_id,
-    desk: s.desk,
-    salience: s.salience,
+  const rankable: (RankableStory & { src: FeedRow })[] = visible.map((s) => ({
+    id: s.story_id, desk: s.desk, salience: s.salience,
     addedAtMs: Date.parse(s.added_at) || Date.now(),
     vec: vecById.get(s.story_id) ? Float32Array.from(vecById.get(s.story_id)!) : null,
     src: s,
@@ -562,30 +547,78 @@ app.get("/api/feed/latest", async (c) => {
     corpusMean: model.corpusMean,
   };
   const ranked = rankStories(rankable, ctx);
-
-  // Priority-3 first (urgency beats taste), then by score.
   ranked.sort((a, b) => {
     const pa = a.story.src.priority === 3 ? 1 : 0;
     const pb = b.story.src.priority === 3 ? 1 : 0;
     return pb - pa || b.score - a.score;
   });
+  return ranked.map((r) => {
+    const level = clampPitch(pitchPrefs[r.story.desk] ?? 1);
+    return shapeStory(r.story.src, {
+      summary: pickSummary(r.story.src, level),
+      pitch: level as PitchLevel,
+      rankScore: Math.round(r.score * 1000) / 1000,
+      rankWhy: whyRanked(r.components, r.story.desk),
+    });
+  });
+}
 
+app.get("/api/feed/latest", async (c) => {
+  const limit = Number(c.req.query("limit") ?? 50);
+  const n = Number.isFinite(limit) ? limit : 50;
+  const sess = await sessionOf(c);
+
+  // Signed-out (or opt-out via ?order=latest): chronological, as before.
+  if (!sess || c.req.query("order") === "latest") {
+    const items = await newsroom(c.env).feed(n, sess?.uid ?? null);
+    return c.json({ ok: true, ranked: false, count: items.length, items: items.map((s) => shapeStory(s)) });
+  }
+
+  const ranked = await rankedForUser(c.env, sess.uid, n);
+  return c.json({ ok: true, ranked: true, count: ranked.length, items: ranked.slice(0, n) });
+});
+
+// ---- Catch-up: the edition that ENDS (PRODUCT_DIRECTION Wave A #1) ----------
+// A finite, capped, self-announcing edition — the calm antidote to the
+// infinite feed. The top few stories that matter, NEW since you last caught
+// up; when there's nothing new, it says so. LLM-free (reuses the ranking).
+const CATCHUP_CAP = 7;
+
+app.get("/api/feed/catchup", async (c) => {
+  const sess = await sessionOf(c);
+  if (!sess) return c.json({ ok: false, error: "sign in required" }, 401);
+  const stub = profileStub(c.env, sess.uid);
+  const [ranked, since] = await Promise.all([
+    rankedForUser(c.env, sess.uid, 100),
+    stub.getCatchupAt(),
+  ]);
+  const sinceMs = since ? Date.parse(since) : 0;
+  // Only stories newer than the last "done" mark — so the edition genuinely
+  // ends and doesn't re-serve what you already caught up on.
+  const fresh = sinceMs ? ranked.filter((s) => (Date.parse(s.addedAt) || 0) > sinceMs) : ranked;
+  const edition = fresh.slice(0, CATCHUP_CAP);
   return c.json({
     ok: true,
-    ranked: true,
-    count: ranked.length,
-    items: ranked.slice(0, n).map((r) => {
-      // Pitch each story to the user's level for its desk (Explain / Normal /
-      // Insider), falling back to the plain summary when a level is absent.
-      const level = clampPitch(pitchPrefs[r.story.desk] ?? 1);
-      return shape(r.story.src, {
-        summary: pickSummary(r.story.src, level),
-        pitch: level as PitchLevel,
-        rankScore: Math.round(r.score * 1000) / 1000,
-        rankWhy: whyRanked(r.components, r.story.desk),
-      });
-    }),
+    caughtUp: edition.length === 0,
+    since,
+    cap: CATCHUP_CAP,
+    remaining: Math.max(0, fresh.length - edition.length),
+    count: edition.length,
+    items: edition,
   });
+});
+
+// Mark the catch-up edition finished — advances the "since" watermark to the
+// newest story shown, so next time only genuinely new stories appear.
+app.post("/api/feed/catchup/done", async (c) => {
+  const sess = await sessionOf(c);
+  if (!sess) return c.json({ ok: false, error: "sign in required" }, 401);
+  const bodyText = await readBodyBounded(c.req.raw, 1024);
+  let newestAt: string | null = null;
+  try { newestAt = (JSON.parse(bodyText ?? "{}") as { newestAt?: string }).newestAt ?? null; } catch { /* default now */ }
+  const mark = newestAt && !Number.isNaN(Date.parse(newestAt)) ? newestAt : new Date().toISOString();
+  await profileStub(c.env, sess.uid).setCatchupAt(mark);
+  return c.json({ ok: true, since: mark });
 });
 
 app.get("/", (c) =>

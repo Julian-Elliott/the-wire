@@ -353,6 +353,23 @@ export class ProfileDO extends DurableObject<Env> {
     return f;
   }
 
+  // ---- Catch-up watermark (the edition that ends) --------------------------
+  // The moment the user last finished their Catch-up edition; the next edition
+  // shows only stories newer than this.
+  async getCatchupAt(): Promise<string | null> {
+    const row = this.ctx.storage.sql
+      .exec<{ value: string }>("SELECT value FROM meta WHERE key = 'catchup_at'")
+      .toArray()[0];
+    return row?.value ?? null;
+  }
+
+  async setCatchupAt(iso: string): Promise<void> {
+    this.ctx.storage.sql.exec(
+      "INSERT INTO meta (key, value) VALUES ('catchup_at', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+      String(iso).slice(0, 40),
+    );
+  }
+
   // ---- Pitch level per desk (0 Explain / 1 Normal / 2 Insider) -------------
   // How each desk's stories are written FOR this user. Default (absent) = 1.
   async getPitches(): Promise<Record<string, number>> {
