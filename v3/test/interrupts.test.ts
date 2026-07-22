@@ -87,6 +87,29 @@ describe("routeInterrupts — the demotion ledger", () => {
     expect(await demotionsOf(uid)).toHaveLength(0); // delivered -> note cleared
   });
 
+  it("production path: a subscribed user is interrupted, an unsubscribed one is demoted actionably", async () => {
+    const subbed = "apple:has-sub";
+    const bare = "apple:no-sub";
+    await seedUser(subbed);
+    await seedUser(bare);
+    await profile(subbed).reportState("open", "home");
+    await profile(bare).reportState("open", "home");
+    // Only `subbed` has a Web Push subscription.
+    await e.DB.prepare(
+      "INSERT INTO push_subscriptions (user_id, endpoint, p256dh, auth, created_at) VALUES (?1, 'https://push.example/s', 'k', 'a', ?2)",
+    ).bind(subbed, new Date().toISOString()).run();
+
+    const ctx = createExecutionContext();
+    // No injected push -> the production channel is the subscription itself.
+    const out = await routeInterrupts(e as any, ctx, [p3()], undefined);
+    await waitOnExecutionContext(ctx);
+
+    expect(out.pushed).toBe(1); // the subscribed user
+    expect(out.heldToDigest).toBe(1); // the bare user
+    expect((await demotionsOf(bare))[0].reason).toMatch(/turn on .* alerts/);
+    expect(await demotionsOf(subbed)).toHaveLength(0); // interrupted, no demotion
+  });
+
   it("asleep is recorded as a silent hold", async () => {
     const uid = "apple:demote-asleep";
     await seedUser(uid);
@@ -115,7 +138,9 @@ describe("routeInterrupts — the demotion ledger", () => {
     expect(out).toEqual({ pushed: 0, heldToDigest: 1 });
     const rows = await demotionsOf(uid);
     expect(rows).toHaveLength(1);
-    expect(rows[0].reason).toMatch(/no push channel/);
+    // A subscription-less user is demoted with an ACTIONABLE reason, never a
+    // silent no-op (the persona-critique delivery fix).
+    expect(rows[0].reason).toMatch(/turn on .* alerts/);
   });
 
   it("synthetic test triggers are routed but never persisted to the ledger", async () => {

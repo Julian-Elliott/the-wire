@@ -131,15 +131,23 @@ export async function routeInterrupts(
   if (!p3.length) return { pushed: 0, heldToDigest: 0 };
   const users = await env.DB.prepare("SELECT uid FROM users").all<{ uid: string }>();
   if (!users.results.length) return { pushed: 0, heldToDigest: 0 };
-  const send = push ?? (env.NTFY_TOPIC ? ntfyPush(env.NTFY_TOPIC) : undefined);
-  // A channel exists if ntfy is set OR Web Push is configured (per-user subs).
-  const hasChannel = !!send || !!vapidKeys(env);
+  // Test channel (injected) delivers to any user; in production a user's
+  // personal channel is their OWN Web Push subscription. ntfy is a separate
+  // OPERATOR ops signal (Julian watches the whole system) — never a user's
+  // delivery channel, so it can't make a subscription-less user look reached.
+  const injected = push;
+  const opsNtfy = env.NTFY_TOPIC ? ntfyPush(env.NTFY_TOPIC) : undefined;
+  const pushUsers = new Set(
+    (await env.DB.prepare("SELECT DISTINCT user_id FROM push_subscriptions").all<{ user_id: string }>())
+      .results.map((r) => r.user_id),
+  );
   const nowIso = new Date().toISOString();
   const ledger: D1PreparedStatement[] = [];
   let pushed = 0;
   let heldToDigest = 0;
   for (const t of p3) {
     const storyId = t.source === "test" ? null : await storyIdOf(t.dedupKey);
+    let opsFired = false; // operator ntfy fires at most once per trigger
     // An audience-scoped trigger is one user's business only — never fan
     // it out to the whole user table.
     const targets = t.audience
@@ -150,16 +158,21 @@ export async function routeInterrupts(
         isInterruptible(priority: 1 | 2 | 3): Promise<{ decision: string; reason: string }>;
       };
       let verdict = await stub.isInterruptible(3);
-      if (verdict.decision === "interrupt" && !hasChannel) {
-        verdict = { decision: "digest", reason: "no push channel configured — held to digest" };
+      // Honest per-user channel check: no subscription = no interrupt (the
+      // story still tops their ranked feed and shows this note in the digest).
+      const personalChannel = !!injected || pushUsers.has(uid);
+      if (verdict.decision === "interrupt" && !personalChannel) {
+        verdict = { decision: "digest", reason: "turn on 🔔 alerts to be interrupted — for now it's in your digest" };
       }
       if (verdict.decision === "interrupt") {
-        // Contain transport failures (sync throw or rejection) here rather
-        // than trusting every injected push to catch its own — an unhandled
-        // rejection must never take down the cron run. ntfy is the operator
-        // channel; Web Push reaches THIS user's own browsers.
-        if (send) ctx.waitUntil(Promise.resolve().then(() => send(t)).catch(() => {}));
-        ctx.waitUntil(deliverWebPush(env, uid, t).catch(() => 0));
+        // Contain transport failures here so an unhandled rejection never
+        // takes down the cron run.
+        if (injected) ctx.waitUntil(Promise.resolve().then(() => injected(t)).catch(() => {}));
+        else ctx.waitUntil(deliverWebPush(env, uid, t).catch(() => 0));
+        if (opsNtfy && !injected && !opsFired) {
+          ctx.waitUntil(Promise.resolve().then(() => opsNtfy(t)).catch(() => {}));
+          opsFired = true;
+        }
         pushed++;
         if (storyId) {
           ledger.push(
