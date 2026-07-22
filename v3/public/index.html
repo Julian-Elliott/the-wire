@@ -84,13 +84,49 @@
       if (res.ok) {
         const me = await res.json();
         signedIn = true;
-        $("who").innerHTML = `${esc(me.name || "signed in")} · <a href="#" id="setarea" title="Set home area for local planning alerts" style="color:var(--dim);text-decoration:none">📍</a> · <a href="/auth/apple/logout" style="color:var(--dim)">sign out</a>`;
+        $("who").innerHTML = `${esc(me.name || "signed in")} · <a href="#" id="alerts" title="Turn on urgent push alerts" style="color:var(--dim);text-decoration:none">🔔</a> · <a href="#" id="setarea" title="Set home area for local planning alerts" style="color:var(--dim);text-decoration:none">📍</a> · <a href="/auth/apple/logout" style="color:var(--dim)">sign out</a>`;
         $("setarea").addEventListener("click", setHomeArea);
+        $("alerts").addEventListener("click", enablePush);
         loadDemotions();
       } else {
         $("who").innerHTML = '<a href="/auth/apple/login" style="color:var(--accent);text-decoration:none">Sign in with Apple</a>';
       }
     } catch { /* header stays quiet */ }
+  }
+
+  // Web Push opt-in: register the service worker, subscribe with the VAPID
+  // public key, and store the subscription. Urgent interrupts then reach this
+  // browser directly (personas' #2 — delivery beyond the operator).
+  const b64urlToBytes = (s) => {
+    const pad = "=".repeat((4 - (s.length % 4)) % 4);
+    const bin = atob((s + pad).replace(/-/g, "+").replace(/_/g, "/"));
+    return Uint8Array.from(bin, (c) => c.charCodeAt(0));
+  };
+  async function enablePush(e) {
+    if (e) e.preventDefault();
+    if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
+      $("stamp").textContent = "this browser can't do push alerts"; return;
+    }
+    try {
+      const perm = await Notification.requestPermission();
+      if (perm !== "granted") { $("stamp").textContent = "alerts permission declined"; return; }
+      const keyRes = await fetch("/api/push/vapid-public");
+      const keyData = await keyRes.json();
+      if (!keyData.ok) { $("stamp").textContent = "push not available yet"; return; }
+      const reg = await navigator.serviceWorker.register("/sw.js");
+      await navigator.serviceWorker.ready;
+      const sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: b64urlToBytes(keyData.key),
+      });
+      const j = sub.toJSON();
+      await fetch("/api/push/subscribe", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ endpoint: j.endpoint, keys: j.keys }),
+      });
+      $("stamp").textContent = "urgent alerts are on for this device 🔔";
+    } catch { $("stamp").textContent = "couldn't turn on alerts"; }
   }
 
   // Home area for "planning app near home" triggers (server rounds to

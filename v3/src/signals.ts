@@ -14,6 +14,7 @@ import { pollCarbon, pollOctopus } from "./lib/signals/energy";
 import { pollPlanit } from "./lib/signals/planit";
 import type { Fetcher, PollerResult, Trigger } from "./lib/signals/types";
 import { pollWeather } from "./lib/signals/weather";
+import { sendWebPush } from "./lib/webpush";
 
 // Operator/default area (Worcester) for shared sources until per-user areas
 // drive them. Overridable via vars.
@@ -84,6 +85,35 @@ const ntfyPush = (topic: string): PushFn => (t) =>
     body: `${t.summary}\n\nwhy: ${t.why}`,
   }).catch(() => {});
 
+const vapidKeys = (env: Env) =>
+  env.VAPID_PRIVATE_KEY && env.VAPID_PUBLIC_KEY
+    ? { publicKey: env.VAPID_PUBLIC_KEY, privatePkcs8: env.VAPID_PRIVATE_KEY, subject: env.VAPID_SUBJECT ?? "mailto:ops@databased.business" }
+    : null;
+
+// Deliver a trigger to ONE user's browser subscriptions (Web Push). Prunes
+// subscriptions the push service reports as gone (404/410). Never throws.
+async function deliverWebPush(env: Env, uid: string, t: Trigger): Promise<number> {
+  const vapid = vapidKeys(env);
+  if (!vapid) return 0;
+  const subs = await env.DB
+    .prepare("SELECT endpoint, p256dh, auth FROM push_subscriptions WHERE user_id = ?1")
+    .bind(uid)
+    .all<{ endpoint: string; p256dh: string; auth: string }>();
+  if (!subs.results.length) return 0;
+  const payload = JSON.stringify({ title: t.title, body: t.summary, why: t.why, url: t.url });
+  let sent = 0;
+  for (const s of subs.results) {
+    try {
+      const r = await sendWebPush(s, payload, vapid);
+      if (r.ok) sent++;
+      else if (r.gone) {
+        await env.DB.prepare("DELETE FROM push_subscriptions WHERE user_id = ?1 AND endpoint = ?2").bind(uid, s.endpoint).run();
+      }
+    } catch { /* one bad endpoint never blocks the rest */ }
+  }
+  return sent;
+}
+
 // Route a priority-3 trigger to each active user through their gate. Every
 // demotion is WRITTEN DOWN (V3_BLUEPRINT §5 trust UX): the reader shows a
 // "why demoted" note, never a silent drop — including when no push channel
@@ -102,6 +132,8 @@ export async function routeInterrupts(
   const users = await env.DB.prepare("SELECT uid FROM users").all<{ uid: string }>();
   if (!users.results.length) return { pushed: 0, heldToDigest: 0 };
   const send = push ?? (env.NTFY_TOPIC ? ntfyPush(env.NTFY_TOPIC) : undefined);
+  // A channel exists if ntfy is set OR Web Push is configured (per-user subs).
+  const hasChannel = !!send || !!vapidKeys(env);
   const nowIso = new Date().toISOString();
   const ledger: D1PreparedStatement[] = [];
   let pushed = 0;
@@ -118,14 +150,16 @@ export async function routeInterrupts(
         isInterruptible(priority: 1 | 2 | 3): Promise<{ decision: string; reason: string }>;
       };
       let verdict = await stub.isInterruptible(3);
-      if (verdict.decision === "interrupt" && !send) {
+      if (verdict.decision === "interrupt" && !hasChannel) {
         verdict = { decision: "digest", reason: "no push channel configured — held to digest" };
       }
       if (verdict.decision === "interrupt") {
         // Contain transport failures (sync throw or rejection) here rather
         // than trusting every injected push to catch its own — an unhandled
-        // rejection must never take down the cron run.
-        ctx.waitUntil(Promise.resolve().then(() => send!(t)).catch(() => {}));
+        // rejection must never take down the cron run. ntfy is the operator
+        // channel; Web Push reaches THIS user's own browsers.
+        if (send) ctx.waitUntil(Promise.resolve().then(() => send(t)).catch(() => {}));
+        ctx.waitUntil(deliverWebPush(env, uid, t).catch(() => 0));
         pushed++;
         if (storyId) {
           ledger.push(

@@ -64,6 +64,10 @@ APPLE_REDIRECT_URI = "https://wire.databased.business/auth/apple/callback"
 APPLE_TEAM_ID = "7BL94Z94QH"
 WEATHERKIT_KEY_ID = "6W7Q97JL6K"
 WEATHERKIT_APP_ID = "business.databased.thewire"
+# Web Push (RFC 8292 VAPID): public key is public-safe (browsers receive it);
+# the private key is the secret VAPID_PRIVATE_KEY. Push dormant without it.
+VAPID_PUBLIC_KEY = "BIR_GZZuwHaPpOdH-kGPCJ3n6zTb-XCSfYiRFJfdYUeWTTaaM5kLZ1VhfowZkB0lSBNMxfEiMPTXrXkL8pUrgSU"
+VAPID_SUBJECT = "mailto:ops@databased.business"
 
 [[kv_namespaces]]
 binding = "KV"

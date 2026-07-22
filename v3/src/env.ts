@@ -20,6 +20,9 @@ export interface Env {
   SESSION_SECRET?: string; // arms Sign in with Apple (with APPLE_CLIENT_ID)
   APPLE_DOMAIN_ASSOCIATION?: string; // served at /.well-known when set
   PERSONA_JWT_SECRET?: string; // arms the Persona tool surface (HS256 client tokens)
+  VAPID_PRIVATE_KEY?: string; // secret (pkcs8 base64url) — arms Web Push
+  VAPID_PUBLIC_KEY?: string; // public var (raw point base64url), also sent to browsers
+  VAPID_SUBJECT?: string; // mailto: or https: contact for the push service
 
   // Plain vars:
   VALIDATE_LIVENESS?: string; // "off" skips network validation (tests/dev only)

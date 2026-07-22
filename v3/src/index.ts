@@ -730,6 +730,54 @@ app.post("/auth/apple/events", async (c) => {
   return c.json({ ok: true, received: type });
 });
 
+// ---- Web Push (personas' #2: reach every user, not just ntfy) --------------
+// VAPID public key for the browser's pushManager.subscribe(). Public, no auth.
+app.get("/api/push/vapid-public", (c) =>
+  c.env.VAPID_PUBLIC_KEY
+    ? c.json({ ok: true, key: c.env.VAPID_PUBLIC_KEY })
+    : c.json({ ok: false, error: "push not configured" }, 503),
+);
+
+// Store a browser subscription against the signed-in user (session-gated).
+app.post("/api/push/subscribe", async (c) => {
+  const sess = await sessionOf(c);
+  if (!sess) return c.json({ ok: false, error: "sign in required" }, 401);
+  const bodyText = await readBodyBounded(c.req.raw, 8 * 1024);
+  if (bodyText === null) return c.json({ ok: false }, 413);
+  let p: { endpoint?: string; keys?: { p256dh?: string; auth?: string } };
+  try {
+    p = JSON.parse(bodyText);
+  } catch {
+    return c.json({ ok: false, error: "invalid JSON" }, 400);
+  }
+  const endpoint = String(p.endpoint ?? "");
+  const p256dh = String(p.keys?.p256dh ?? "");
+  const auth = String(p.keys?.auth ?? "");
+  if (!/^https:\/\//.test(endpoint) || !p256dh || !auth) {
+    return c.json({ ok: false, error: "bad subscription" }, 400);
+  }
+  await c.env.DB.prepare(
+    `INSERT INTO push_subscriptions (user_id, endpoint, p256dh, auth, created_at)
+     VALUES (?1, ?2, ?3, ?4, ?5)
+     ON CONFLICT(user_id, endpoint) DO UPDATE SET p256dh = excluded.p256dh, auth = excluded.auth`,
+  ).bind(sess.uid, endpoint.slice(0, 800), p256dh.slice(0, 200), auth.slice(0, 100), new Date().toISOString()).run();
+  return c.json({ ok: true });
+});
+
+app.post("/api/push/unsubscribe", async (c) => {
+  const sess = await sessionOf(c);
+  if (!sess) return c.json({ ok: false, error: "sign in required" }, 401);
+  const bodyText = await readBodyBounded(c.req.raw, 8 * 1024);
+  let endpoint = "";
+  try { endpoint = String((JSON.parse(bodyText ?? "{}") as { endpoint?: string }).endpoint ?? ""); } catch { /* all */ }
+  if (endpoint) {
+    await c.env.DB.prepare("DELETE FROM push_subscriptions WHERE user_id = ?1 AND endpoint = ?2").bind(sess.uid, endpoint).run();
+  } else {
+    await c.env.DB.prepare("DELETE FROM push_subscriptions WHERE user_id = ?1").bind(sess.uid).run();
+  }
+  return c.json({ ok: true });
+});
+
 app.get("/.well-known/apple-developer-domain-association.txt", (c) =>
   c.env.APPLE_DOMAIN_ASSOCIATION
     ? c.text(c.env.APPLE_DOMAIN_ASSOCIATION)
