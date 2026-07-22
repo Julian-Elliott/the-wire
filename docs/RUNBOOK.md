@@ -77,3 +77,21 @@ A `payload.json` containing an Apple `sub` (the stable pairwise user identifier 
 ## 9. R2 audio caching note
 
 `wire-audio` is served **through the Worker**, so zone Cache Rules do nothing. Set `Cache-Control: public, max-age=86400, immutable` in code and wrap the handler in `caches.default.match()/put()`. If audio ever moves to a public custom domain (`audio.databased.business`), switch to a Cache Everything rule with native Range support — a Phase 3 option, not needed now.
+
+## 10. Cut-over: retiring v2 (desk.databased.business → wire.databased.business)
+
+**Reality check (verified July 2026):** v2 has exactly **one** real signed-in user — Julian — whose profile is already fully migrated to v3. The v2 namespace holds 1 apple profile + a shared anonymous feed. So cut-over is NOT a mass migration; it is a clean switch with almost nothing at stake beyond one person's already-duplicated data. The "other users" are prospective invitees who sign up fresh on v3 (no migration — the follow-picker lets them choose their desks from scratch).
+
+**Readiness (all met):** v3 is feature-complete against the vision — ranked personalised feed, follow-picker with per-desk pitch levels, Web Push, real-erasure privacy, a WeatherKit-backed interrupt tier, an accessible reader — and has run unattended for weeks. Sign-in works in a real browser.
+
+**The sequence (each step is Julian's call; none is compressible past the clock):**
+
+1. **Re-run the migration once more at cut-over** (`node v3/scripts/migrate-v2.mjs --apply`) to catch any profile change since the first run. Idempotent; real signals are never clobbered.
+2. **Switch the routine to v3-only.** In the routine's env, remove `INGEST_URL`/`INGEST_SECRET` (the v2 leg) and keep `INGEST_URL_V3`/`INGEST_SECRET_V3` — or rename the v3 vars to the primary names. The routine then feeds only v3. (Until this step, dual-post keeps both alive.)
+3. **Two clean weeks.** Run v3 as the primary with the routine feeding only it. "Clean" = no data-loss reports, watchdog green, nightly backups landing, editions arriving on cadence. This clock cannot be shortened.
+4. **v2 read-only, then retire.** Point `desk.databased.business` at a static "we've moved to wire.databased.business" page (or leave the v2 worker serving read-only). After 30 days, delete the v2 worker and its resources. Keep the R2/KV backups.
+5. **Apple + DNS housekeeping.** The Services ID keeps both return URLs during the transition; drop the `desk.databased.business` return URL only after v2 is retired. Leave the zone and TLS as-is (both hosts share it).
+
+**Irreversible / outward-facing — do NOT let an agent do these unprompted:** switching the routine off v2, pointing desk.databased.business away, deleting the v2 worker. These change what real people see and are Julian's to trigger.
+
+**Rollback:** until step 4, re-adding the v2 env vars to the routine restores dual-post instantly — v2 was never modified, only stopped being fed.
