@@ -325,31 +325,70 @@ export class ProfileDO extends DurableObject<Env> {
     );
   }
 
-  async getFollows(): Promise<Record<string, number>> {
-    const existing = this.readFollows();
-    if (existing) return existing;
-    // Lazy seed from the migrated v2 config's enabled desks (weight 1 each).
-    const cfg = (await this.getConfig()).config as
-      | { desks?: { enabled?: unknown } }
-      | null;
-    const enabled = Array.isArray(cfg?.desks?.enabled) ? (cfg!.desks!.enabled as unknown[]) : [];
-    const seeded: Record<string, number> = {};
-    for (const d of enabled) {
-      const key = String(d).replace(/[^A-Za-z0-9_-]/g, "").slice(0, 40);
-      if (key) seeded[key] = 1;
-    }
-    this.writeFollows(seeded);
-    return seeded;
+  // Durable "this user has made or carried over a real topic choice" marker.
+  // Its SOLE purpose is to distinguish a user who deliberately chose NOTHING
+  // (empty follows row + marker → urgent-only feed) from a legacy user still
+  // carrying the OLD silent-{} row written by the removed lazy-seed (empty row,
+  // no marker, no v2 config → treated as never-chose so first-run heals them).
+  private readOnboarded(): boolean {
+    const row = this.ctx.storage.sql
+      .exec<{ value: string }>("SELECT value FROM meta WHERE key = 'onboarded'")
+      .toArray()[0];
+    return row?.value === "1";
   }
 
-  // weight 0 (or absent) = unfollow/remove; 1..3 = follow strength.
+  async markOnboarded(): Promise<void> {
+    this.ctx.storage.sql.exec(
+      "INSERT INTO meta (key, value) VALUES ('onboarded', '1') ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+    );
+  }
+
+  // THE FIRST-RUN SEAM (PRODUCT_DIRECTION Wave A #3). A PURE read — it NEVER
+  // writes. The old getFollows() lazily PERSISTED a derived object (even {})
+  // on first read, which conflated "never chose" (no row) with "chose nothing"
+  // ({} row) and silently dropped brand-new users into the all-desks firehose.
+  //   onboarded = a non-empty follows row exists, OR the marker is set (covers
+  //     "chose nothing"), OR a v2 config is present (a migrated user's enabled
+  //     desks are a real prior choice that carries over — no first-run).
+  //   follows  = the explicit row if present, else the v2-derived set (derived
+  //     WITHOUT persisting), else {}.
+  async getFollowState(): Promise<{ follows: Record<string, number>; onboarded: boolean }> {
+    const explicit = this.readFollows(); // null iff the row is absent; {} is truthy
+    const marker = this.readOnboarded();
+    const cfg = (await this.getConfig()).config as { desks?: { enabled?: unknown } } | null;
+    if (explicit) {
+      const onboarded = marker || Object.keys(explicit).length > 0 || cfg != null;
+      return { follows: explicit, onboarded };
+    }
+    if (cfg) {
+      // v2-migrated, no explicit row yet → derive from enabled desks, DON'T persist.
+      const enabled = Array.isArray(cfg.desks?.enabled) ? (cfg.desks!.enabled as unknown[]) : [];
+      const derived: Record<string, number> = {};
+      for (const d of enabled) {
+        const key = String(d).replace(/[^A-Za-z0-9_-]/g, "").slice(0, 40);
+        if (key) derived[key] = 1;
+      }
+      return { follows: derived, onboarded: true };
+    }
+    return { follows: {}, onboarded: marker }; // brand-new (marker false ⇒ first-run chooser)
+  }
+
+  async getFollows(): Promise<Record<string, number>> {
+    return (await this.getFollowState()).follows; // NEVER writes
+  }
+
+  // weight 0 (or absent) = unfollow/remove; 1..3 = follow strength. Any
+  // deliberate follow edit onboards the user for good: it materialises the
+  // explicit row AND the marker, so a tap-then-untap reads as "chose nothing"
+  // (empty row + marker), never as never-chose.
   async setFollow(desk: string, weight: number): Promise<Record<string, number>> {
     const key = String(desk).replace(/[^A-Za-z0-9_-]/g, "").slice(0, 40);
-    const f = await this.getFollows();
+    const f = await this.getFollows(); // now non-writing: {} | v2-derived | explicit row
     if (!key) return f;
     if (weight <= 0) delete f[key];
     else f[key] = Math.min(3, Math.max(1, Math.round(weight)));
     this.writeFollows(f);
+    await this.markOnboarded();
     return f;
   }
 

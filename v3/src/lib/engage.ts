@@ -18,6 +18,9 @@ export const ENGAGEMENT_EVENTS = [
   "interrupt_never_again",
   "search_onboard_started",
   "search_onboard_confirmed",
+  "topic_onboard_started",
+  "topic_onboard_confirmed",
+  "topic_onboard_skipped",
   "digest_email_opened",
   "recommendation_accepted",
 ] as const;

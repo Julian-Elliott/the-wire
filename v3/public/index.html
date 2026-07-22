@@ -80,6 +80,22 @@
   .dp-w[aria-pressed="true"] { color: var(--bg); background: var(--accent); border-color: var(--accent); font-weight: 600; }
   .dp-add { color: var(--accent); border-color: var(--accent); }
   footer { text-align: center; color: var(--dim); font-size: 13px; padding: 20px; }
+  /* First-run chooser (the feed IS the chooser). Chips reuse .dp-w, so the
+     selected state is the accent FILL from .dp-w[aria-pressed="true"] — never
+     colour alone — and the global :focus-visible ring already covers them. */
+  .onb { padding: 8px 0 40px; }
+  .onb-title { font-size: 22px; font-weight: 700; line-height: 1.3; margin: 8px 0 6px; color: var(--ink); }
+  .onb-title:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; border-radius: 6px; }
+  .onb-sub { color: var(--dim); font-size: 15px; margin: 0 0 14px; }
+  .onb-chips { list-style: none; display: flex; flex-wrap: wrap; gap: 8px; padding: 0; margin: 0 0 14px; }
+  .onb-chips li { margin: 0; }
+  .onb-chip { text-transform: capitalize; padding: 8px 14px; font-size: 14px; border-radius: 999px; }
+  .onb-count { color: var(--accent); font-size: 14px; min-height: 1.4em; margin: 0 0 12px; }
+  .onb-done { border-color: var(--accent); color: var(--accent); margin: 0 0 8px; }
+  .onb-preview { margin-top: 6px; }
+  @keyframes onbIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+  .onb-preview .onb-in { animation: onbIn .45s ease-out both; }
+  @media (prefers-reduced-motion: reduce) { .onb-preview .onb-in { animation: none; } }
 </style>
 </head>
 <body>
@@ -111,6 +127,20 @@
   let currentItems = []; // whatever is rendered in #feed now (full feed or catch-up)
   let signedIn = false;
   let held = {}; // story_id -> "why held back" note (trust UX, §5)
+
+  // First-run: the feed IS the chooser (PRODUCT_DIRECTION Wave A #3). A brand-
+  // new user lands on tappable topic chips where the stream would be; each tap
+  // follows a desk server-side and their feed materialises live below the chips.
+  let onboardingActive = false;
+  let chosen = {};            // desk -> 1, optimistic mirror of follows during first-run
+  let available = [];         // desks offered as chips
+  let prevPreviewIds = new Set();
+  let previewTimer = null, pendingAdded = "";
+  const DESK_LABELS = { world: "World", uk: "UK", politics: "Politics", business: "Business",
+    markets: "Markets", tech: "Technology", ev: "Electric vehicles", energy: "Energy",
+    science: "Science", health: "Health", climate: "Climate", weather: "Weather",
+    sport: "Sport", gaming: "Gaming", culture: "Culture", planning: "Near home" };
+  const deskLabel = (id) => DESK_LABELS[id] || (String(id || "").charAt(0).toUpperCase() + String(id || "").slice(1));
 
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (ch) =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
@@ -162,6 +192,11 @@
   let catchupNewest = null;
   async function loadCatchup(e) {
     if (e) e.preventDefault();
+    // Opening Catch-up leaves the first-run chooser: clearing the flag re-arms
+    // load() so this screen's "Browse the full feed" works — and because the
+    // server still reports onboarding:true for a never-chose user, that load()
+    // re-enters startOnboarding() and restores the chooser (never a dead-end).
+    if (onboardingActive) { onboardingActive = false; clearTimeout(previewTimer); }
     say("Loading your catch-up…");
     try {
       const data = await (await fetch("/api/feed/catchup")).json();
@@ -200,6 +235,114 @@
     loadCatchup();
   }
 
+  // ---- First run: the feed IS the chooser (PRODUCT_DIRECTION Wave A #3) ------
+  // Reached only when /api/feed/latest reports onboarding:true (never-chose).
+  // Choosing and reading are the same continuous surface — no modal, no mode,
+  // no default firehose. Every card the user sees traces to a tap they made.
+  async function startOnboarding() {
+    onboardingActive = true; signedIn = true;
+    say("Choose a few topics to begin your feed");
+    sendEvent("topic_onboard_started");
+    let d;
+    try { d = await (await fetch("/api/me/desks")).json(); }
+    catch { onboardingActive = false; say("Cannot load topics right now. Please refresh."); return; }
+    chosen = d.follows || {};
+    available = (d.available || []).slice().sort();
+    prevPreviewIds = new Set();
+    renderChooser();
+  }
+
+  function renderChooser() {
+    const has = available.length > 0;
+    const chips = available.map((k) =>
+      `<li><button type="button" class="dp-w onb-chip" aria-pressed="${chosen[k] !== undefined}" data-desk="${esc(k)}">${esc(deskLabel(k))}</button></li>`
+    ).join("");
+    $("feed").innerHTML =
+      '<section class="onb" aria-labelledby="onb-h">' +
+        '<h2 id="onb-h" class="onb-title" tabindex="-1">Choose a few topics to begin your feed</h2>' +
+        '<p class="onb-sub">No defaults, nothing you didn’t choose. Tap a topic and your stream ' +
+        'starts filling in below — tap as many as you like.</p>' +
+        (has
+          ? `<ul class="onb-chips" role="group" aria-label="Topics you can follow">${chips}</ul>`
+          : '<p class="onb-sub">We’re gathering today’s topics — nothing to choose just yet. ' +
+            'Start reading and pick topics any time from ⚙ Topics.</p>') +
+        `<p id="onbCount" class="onb-count" role="status" aria-live="polite">${has ? "Pick a topic to start your feed." : " "}</p>` +
+        `<button type="button" class="ctl onb-done" id="onbDone"${has ? " hidden" : ""}>${has ? "Start reading →" : "Continue →"}</button>` +
+        '<ol id="onbPreview" class="feed-list onb-preview" aria-label="Your feed so far"></ol>' +
+      '</section>';
+    $("feed").querySelectorAll(".onb-chip").forEach((b) =>
+      b.addEventListener("click", () => togglePick(b.dataset.desk)));
+    $("onbDone").addEventListener("click", finishOnboarding);
+  }
+
+  async function togglePick(desk) {
+    const following = chosen[desk] !== undefined;
+    if (following) delete chosen[desk]; else chosen[desk] = 1; // optimistic
+    reflectChips();
+    if (available.length) { const done = $("onbDone"); if (done) done.hidden = Object.keys(chosen).length === 0; }
+    pendingAdded = following ? pendingAdded : desk;
+    try {
+      await fetch("/api/me/desks", { method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ desk, weight: following ? 0 : 1 }) });
+    } catch { /* the re-render reflects intent; the next tap reconciles */ }
+    clearTimeout(previewTimer);
+    previewTimer = setTimeout(previewTick, 200); // debounce the live-preview refetch
+  }
+
+  function reflectChips() {
+    document.querySelectorAll(".onb-chip").forEach((b) =>
+      b.setAttribute("aria-pressed", String(chosen[b.dataset.desk] !== undefined)));
+  }
+
+  async function previewTick() {
+    const added = pendingAdded; pendingAdded = "";
+    await refreshPreview();
+    updateOnbStatus(added);
+  }
+
+  async function refreshPreview() {
+    let list = [];
+    try { list = (await (await fetch("/api/feed/latest?limit=100")).json()).items || []; } catch { return; }
+    currentItems = list; // so preview link-outs markRead correctly
+    const ol = $("onbPreview"); if (!ol) return;
+    ol.innerHTML = list.map(renderCard).join("");
+    Array.from(ol.children).forEach((li, i) => {
+      const id = list[i] && list[i].id;
+      if (id && !prevPreviewIds.has(id)) li.classList.add("onb-in"); // animate only genuinely new cards
+    });
+    prevPreviewIds = new Set(list.map((i) => i.id));
+  }
+
+  function updateOnbStatus(justAdded) {
+    const n = Object.keys(chosen).length, s = currentItems.length;
+    const el = $("onbCount"), done = $("onbDone");
+    if (el) el.textContent = n === 0
+      ? "Pick a topic to start your feed."
+      : `${justAdded ? "“" + deskLabel(justAdded) + "” added — " : ""}${s} ${s === 1 ? "story" : "stories"} in your feed from ${n} ${n === 1 ? "topic" : "topics"}. Add more, or start reading.`;
+    if (done && available.length) done.hidden = n === 0;
+  }
+
+  async function finishOnboarding() {
+    sendEvent(Object.keys(chosen).length ? "topic_onboard_confirmed" : "topic_onboard_skipped");
+    try { // stamp onboarded even at 0 picks so the chooser never reappears (respects "chose nothing")
+      await fetch("/api/me/desks", { method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ onboarded: true }) });
+    } catch { /* a real pick already flipped onboarded via its row; the marker is belt-and-suspenders */ }
+    onboardingActive = false; clearTimeout(previewTimer);
+    await load(); // now onboarding:false → the ordinary single ranked stream
+    const link = $("feed").querySelector("h2 a"); // user-initiated → moving focus is expected
+    if (link) link.focus();
+    else { const t = $("desksbtn"); if (t) t.focus(); } // empty (urgent-only) feed → land on ⚙ Topics
+  }
+
+  // Reopening ⚙ Topics mid-chooser must not tear the chooser down (load() is
+  // guarded off during onboarding); resync chips + preview from the panel edits.
+  async function syncChooser() {
+    try { const d = await (await fetch("/api/me/desks")).json();
+      chosen = d.follows || {}; available = (d.available || []).slice().sort(); } catch { /* keep current */ }
+    renderChooser(); await refreshPreview(); updateOnbStatus("");
+  }
+
   // Follow-picker: choose which topics you follow and how strongly.
   const WEIGHT_LABELS = { 1: "Some", 2: "More", 3: "Lots" };
   function toggleDesks(e) {
@@ -214,6 +357,7 @@
     $("panel").hidden = true;
     const btn = $("desksbtn");
     if (btn) btn.focus(); // return focus to the button that opened it
+    if (onboardingActive) { syncChooser(); return; } // keep the first-run chooser alive
     load();
   }
   async function renderDesksPanel() {
@@ -254,7 +398,7 @@
         '<div class="dp-body">' +
         (followed.length
           ? `<h2 class="dp-sub" style="margin-top:4px">Following</h2>${followed.map(followRow).join("")}`
-          : '<p style="color:var(--dim);margin:8px 0">Right now you see every topic. Pick the ones you want below to focus your news.</p>') +
+          : '<p style="color:var(--dim);margin:8px 0">You’re only seeing urgent news right now. Pick the topics you want below and they’ll fill your feed.</p>') +
         (notFollowed.length ? `<h2 class="dp-sub">Add a topic</h2>${notFollowed.map(addRow).join("")}` : "") +
         "</div>";
       $("dp-close").addEventListener("click", closeDesks);
@@ -369,6 +513,7 @@
   }
 
   function renderFeed() {
+    if (onboardingActive) return; // the inline first-run chooser owns #feed
     if (!items.length) {
       $("feed").innerHTML = `<div id="empty"><p class="big">No stories yet</p>
         <p>The newsroom is running. New stories arrive a few times a day — check back soon.</p></div>`;
@@ -378,8 +523,10 @@
   }
 
   async function load() {
+    if (onboardingActive) return; // don't clobber an in-progress chooser
     try {
       const data = await (await fetch("/api/feed/latest?limit=100")).json();
+      if (data.onboarding) { startOnboarding(); return; } // brand-new / never-chose → inline chooser
       items = data.items ?? [];
       currentItems = items;
       const when = new Date().toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });

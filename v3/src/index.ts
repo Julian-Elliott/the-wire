@@ -74,6 +74,8 @@ const profileStub = (env: Env, uid: string) =>
     recordAudit(client: string, tool: string): Promise<void>;
     purge(): Promise<{ ok: true; cleared: string[] }>;
     getFollows(): Promise<Record<string, number>>;
+    getFollowState(): Promise<{ follows: Record<string, number>; onboarded: boolean }>;
+    markOnboarded(): Promise<void>;
     setFollow(desk: string, weight: number): Promise<Record<string, number>>;
     getPitches(): Promise<Record<string, number>>;
     setPitch(desk: string, level: number): Promise<Record<string, number>>;
@@ -516,22 +518,30 @@ const shapeStory = (s: FeedRow, extra: Record<string, unknown> = {}) => ({
 // LLM-free (V3_BLUEPRINT §3 L4).
 async function rankedForUser(
   env: Env, uid: string, poolLimit: number,
-): Promise<ReturnType<typeof shapeStory>[]> {
+): Promise<{ items: ReturnType<typeof shapeStory>[]; onboarded: boolean }> {
   const items = await newsroom(env).feed(poolLimit, uid);
   const nr = env.NEWSROOM.get(env.NEWSROOM.idFromName("main")) as unknown as NewsroomEmbeds;
   const pstub = profileStub(env, uid);
-  const [withVecs, follows, pitchPrefs] = await Promise.all([
+  const [withVecs, followState, pitchPrefs] = await Promise.all([
     nr.feedWithEmbeddings(Math.max(poolLimit, 100)),
-    pstub.getFollows(),
+    pstub.getFollowState(),
     pstub.getPitches(),
   ]);
+  const { follows, onboarded } = followState;
   const vecById = new Map(withVecs.map((r) => [r.story_id, r.vec]));
   const model = await buildUserModel(env, uid, withVecs.map((r) => ({ story_id: r.story_id, desk: r.desk, vec: r.vec })));
 
-  const hasFollows = Object.keys(follows).length > 0;
-  const visible = hasFollows
+  // Chose topics → your desks + anything genuinely urgent. Chose nothing
+  // (onboarded, empty follows) → urgent only, NEVER every desk. Never chose
+  // (brand-new, no row) → the full pool, but the reader diverts that user to
+  // the inline first-run chooser (onboarding:true) and never renders it — so
+  // the firehose is a client-gated fallback, not a surface. Keeping the no-row
+  // branch preserves the signal-only ranked path feed-ranked/areas tests cover.
+  const visible = Object.keys(follows).length > 0
     ? items.filter((s) => s.priority === 3 || follows[s.desk] !== undefined)
-    : items;
+    : onboarded
+      ? items.filter((s) => s.priority === 3)
+      : items;
 
   const rankable: (RankableStory & { src: FeedRow })[] = visible.map((s) => ({
     id: s.story_id, desk: s.desk, salience: s.salience,
@@ -552,7 +562,7 @@ async function rankedForUser(
     const pb = b.story.src.priority === 3 ? 1 : 0;
     return pb - pa || b.score - a.score;
   });
-  return ranked.map((r) => {
+  const shaped = ranked.map((r) => {
     const level = clampPitch(pitchPrefs[r.story.desk] ?? 1);
     return shapeStory(r.story.src, {
       summary: pickSummary(r.story.src, level),
@@ -561,6 +571,7 @@ async function rankedForUser(
       rankWhy: whyRanked(r.components, r.story.desk),
     });
   });
+  return { items: shaped, onboarded };
 }
 
 app.get("/api/feed/latest", async (c) => {
@@ -574,8 +585,10 @@ app.get("/api/feed/latest", async (c) => {
     return c.json({ ok: true, ranked: false, count: items.length, items: items.map((s) => shapeStory(s)) });
   }
 
-  const ranked = await rankedForUser(c.env, sess.uid, n);
-  return c.json({ ok: true, ranked: true, count: ranked.length, items: ranked.slice(0, n) });
+  const { items, onboarded } = await rankedForUser(c.env, sess.uid, n);
+  // onboarding:true ⇒ brand-new / never-chose user — the reader shows the
+  // inline first-run chooser instead of rendering these (client-gated) items.
+  return c.json({ ok: true, ranked: true, onboarding: !onboarded, count: items.length, items: items.slice(0, n) });
 });
 
 // ---- Catch-up: the edition that ENDS (PRODUCT_DIRECTION Wave A #1) ----------
@@ -588,14 +601,18 @@ app.get("/api/feed/catchup", async (c) => {
   const sess = await sessionOf(c);
   if (!sess) return c.json({ ok: false, error: "sign in required" }, 401);
   const stub = profileStub(c.env, sess.uid);
-  const [ranked, since] = await Promise.all([
+  const [{ items: ranked, onboarded }, since] = await Promise.all([
     rankedForUser(c.env, sess.uid, 100),
     stub.getCatchupAt(),
   ]);
+  // Defence in depth: a not-yet-onboarded user must never reach a firehose
+  // Catch-up (the header ☕ button stays live during first-run). Serve only
+  // genuine urgent items — usually none → a clean "you're all caught up".
+  const pool = onboarded ? ranked : ranked.filter((s) => s.priority === 3);
   const sinceMs = since ? Date.parse(since) : 0;
   // Only stories newer than the last "done" mark — so the edition genuinely
   // ends and doesn't re-serve what you already caught up on.
-  const fresh = sinceMs ? ranked.filter((s) => (Date.parse(s.addedAt) || 0) > sinceMs) : ranked;
+  const fresh = sinceMs ? pool.filter((s) => (Date.parse(s.addedAt) || 0) > sinceMs) : pool;
   const edition = fresh.slice(0, CATCHUP_CAP);
   return c.json({
     ok: true,
@@ -797,13 +814,13 @@ app.get("/api/me/desks", async (c) => {
   const sess = await sessionOf(c);
   if (!sess) return c.json({ ok: false, error: "sign in required" }, 401);
   const stub = profileStub(c.env, sess.uid);
-  const [follows, pitches, feed] = await Promise.all([
-    stub.getFollows(),
+  const [{ follows, onboarded }, pitches, feed] = await Promise.all([
+    stub.getFollowState(),
     stub.getPitches(),
     newsroom(c.env).feed(200, sess.uid),
   ]);
   const available = [...new Set(feed.map((s) => s.desk))].sort();
-  return c.json({ ok: true, follows, pitches, available });
+  return c.json({ ok: true, follows, pitches, available, onboarded });
 });
 
 app.post("/api/me/desks", async (c) => {
@@ -811,15 +828,24 @@ app.post("/api/me/desks", async (c) => {
   if (!sess) return c.json({ ok: false, error: "sign in required" }, 401);
   const bodyText = await readBodyBounded(c.req.raw, 4 * 1024);
   if (bodyText === null) return c.json({ ok: false }, 413);
-  let p: { desk?: string; weight?: number; pitch?: number };
+  let p: { desk?: string; weight?: number; pitch?: number; onboarded?: boolean };
   try {
     p = JSON.parse(bodyText);
   } catch {
     return c.json({ ok: false, error: "invalid JSON" }, 400);
   }
-  const desk = cleanDeskId(p.desk);
-  if (!desk) return c.json({ ok: false, error: "bad desk" }, 400);
   const stub = profileStub(c.env, sess.uid);
+  // "Start reading" with zero picks still onboards (marker only) — this is what
+  // lets a user deliberately choose nothing without the chooser reappearing.
+  if (p.onboarded === true) await stub.markOnboarded();
+  const desk = cleanDeskId(p.desk);
+  if (!desk) {
+    if (p.onboarded === true) {
+      const [follows, pitches] = await Promise.all([stub.getFollows(), stub.getPitches()]);
+      return c.json({ ok: true, follows, pitches });
+    }
+    return c.json({ ok: false, error: "bad desk" }, 400);
+  }
   // A request sets the weight, the pitch, or both.
   const follows = p.weight !== undefined ? await stub.setFollow(desk, Number(p.weight) || 0) : await stub.getFollows();
   const pitches = p.pitch !== undefined ? await stub.setPitch(desk, Number(p.pitch)) : await stub.getPitches();
