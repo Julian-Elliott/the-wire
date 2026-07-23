@@ -88,3 +88,18 @@ export function whyRanked(c: ScoreComponents, desk: string): string {
   if (c.recency >= 0.85) bits.push("just in");
   return bits.length ? bits.join(" · ") : `on your ${desk} desk`;
 }
+
+// ---- Need-to-know: stakes × scope (PRODUCT_DIRECTION Wave B) ---------------
+// A story is "need to know" for a user when it has real STAKES *and* a concrete
+// anchor in that user's SCOPE. These bound the "Worth knowing" band so it can
+// never become a firehose: at most NEED_MARK_CAP marks per edition.
+export const NEED_THRESHOLD = 0.5; // both real stakes AND a concrete anchor required
+export const NEED_MARK_CAP = 3; // ≤3 "Worth knowing" marks per edition
+
+// A story's stakes ∈ [0,1] from fields the feed already carries. impact_class-
+// ready: when the Routine adds story.impact_class this becomes
+// max(salience/100, IMPACT_MAP[impactClass] ?? 0) — a one-line change.
+export function stakesOf(salience: number, priority: number): number {
+  const p = priority === 3 ? 1 : priority === 2 ? 0.5 : 0;
+  return Math.max(Math.max(0, Math.min(100, salience)) / 100, p);
+}

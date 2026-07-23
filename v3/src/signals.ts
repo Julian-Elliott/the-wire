@@ -100,7 +100,7 @@ async function deliverWebPush(env: Env, uid: string, t: Trigger): Promise<number
     .bind(uid)
     .all<{ endpoint: string; p256dh: string; auth: string }>();
   if (!subs.results.length) return 0;
-  const payload = JSON.stringify({ title: t.title, body: t.summary, why: t.why, url: t.url });
+  const payload = JSON.stringify({ title: t.title, body: t.summary, why: t.why, url: t.url, gentle: (t as { gentle?: boolean }).gentle || undefined });
   let sent = 0;
   for (const s of subs.results) {
     try {
@@ -200,6 +200,53 @@ export async function routeInterrupts(
   return { pushed, heldToDigest };
 }
 
+// Gentle scope-nudge (Wave B want/need) — a STRICTLY LOWER, quieter rung than
+// routeInterrupts, OFF by default. Over p2 AUDIENCE triggers ONLY (a serious
+// development in the user's OWN area — one uid, zero fan-out). Only fires if the
+// user opted in (getScopeNudge); the gate (isInterruptible(2,{scopeNudge})) is
+// narrower than p3 (open-only, ≤1/20h, asleep held); the payload is SILENT;
+// every non-delivery is written to the demotion ledger exactly like p3. Never
+// touches routeInterrupts or the p3 path.
+export async function routeNudges(
+  env: Env, ctx: { waitUntil(p: Promise<unknown>): void }, triggers: Trigger[],
+): Promise<{ nudged: number; heldToDigest: number }> {
+  const cand = triggers.filter((t) => t.priority === 2 && !!t.audience);
+  if (!cand.length) return { nudged: 0, heldToDigest: 0 };
+  const vapid = vapidKeys(env);
+  const nowIso = new Date().toISOString();
+  const ledger: D1PreparedStatement[] = [];
+  let nudged = 0, heldToDigest = 0;
+  for (const t of cand) {
+    const uid = t.audience!;
+    const stub = env.PROFILES.get(env.PROFILES.idFromName(uid)) as unknown as {
+      getScopeNudge(): Promise<boolean>;
+      isInterruptible(p: 1 | 2 | 3, nowMs?: number, opts?: { scopeNudge?: boolean }): Promise<{ decision: string; reason: string }>;
+      markNudged(nowMs?: number): Promise<void>;
+    };
+    if (!(await stub.getScopeNudge())) continue; // dormant: no opt-in ⇒ zero cost, no ledger noise
+    const storyId = await storyIdOf(t.dedupKey);
+    let verdict = await stub.isInterruptible(2, Date.now(), { scopeNudge: true });
+    const hasSub = !!vapid && (await env.DB.prepare("SELECT 1 FROM push_subscriptions WHERE user_id = ?1 LIMIT 1").bind(uid).first()) != null;
+    if (verdict.decision === "interrupt" && !hasSub) {
+      verdict = { decision: "digest", reason: "turn on 🔔 alerts for a gentle heads-up — for now it's in your feed" };
+    }
+    if (verdict.decision === "interrupt") {
+      ctx.waitUntil(deliverWebPush(env, uid, { ...t, gentle: true } as Trigger & { gentle: true }).catch(() => 0));
+      await stub.markNudged(); // enforce the ≤1/20h ceiling across cron runs
+      nudged++;
+      ledger.push(env.DB.prepare("DELETE FROM demotion_ledger WHERE user_id = ?1 AND story_id = ?2").bind(uid, storyId));
+    } else {
+      heldToDigest++;
+      ledger.push(env.DB.prepare(
+        `INSERT INTO demotion_ledger (user_id, story_id, decision, reason, at) VALUES (?1,?2,?3,?4,?5)
+         ON CONFLICT(user_id, story_id) DO NOTHING`,
+      ).bind(uid, storyId, verdict.decision === "silent" ? "silent" : "digest", verdict.reason, nowIso));
+    }
+  }
+  if (ledger.length) await env.DB.batch(ledger);
+  return { nudged, heldToDigest };
+}
+
 // Planning polls, one polite radius query per DISTINCT user home area
 // (V3_BLUEPRINT §7: "planning app 250 m from home" means THEIR home).
 // Users sharing a rounded area share one query; each user still gets their
@@ -283,10 +330,14 @@ export async function runSignals(
 
   const inserted = await persistTriggers(env, triggers);
   const routed = await routeInterrupts(env, ctx, [...triggers, ...testTriggers]);
+  // Dormant gentle nudge (Wave B): p2 audience triggers already persisted above,
+  // so a nudged story joins the feed + ledger exactly like a p3. No-op unless a
+  // user opted in.
+  const nudged = await routeNudges(env, ctx, triggers);
 
   const heartbeats = JSON.parse((await env.KV.get("hb:crons")) ?? "{}");
   heartbeats["signals"] = new Date().toISOString();
   await env.KV.put("hb:crons", JSON.stringify(heartbeats));
 
-  return { backends, triggers: triggers.length, inserted, ...routed, failures };
+  return { backends, triggers: triggers.length, inserted, ...routed, nudges: nudged.nudged, failures };
 }

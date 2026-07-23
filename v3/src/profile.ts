@@ -10,6 +10,10 @@ import { MAX_SAVED_SEARCHES, searchId } from "./lib/search";
 // lexically forever-gracefully); `weight` is the Some/More/Lots dial.
 interface SavedSearch { id: string; q: string; vec: number[] | null; weight: number; createdAt: string; }
 
+// Scope tags (Wave B want/need): coarse EXTERNAL anchors the user volunteers —
+// a place, employer, or sector — never a protected attribute of the person.
+interface ScopeTag { tag: string; vec: number[] | null; }
+
 // ProfileDO ("Persona") — one per user, keyed idFromName(userId)
 // (V3_BLUEPRINT §4). Derivation is strictly one-directional:
 // signals → traits → policies. The DO owns decay; callers only ever
@@ -41,6 +45,9 @@ export interface InterruptVerdict {
 }
 
 const STATE_FRESH_MS = 30 * 60_000; // trust ladder: older than this = unknown
+const MAX_SCOPE_TAGS = 8;
+const SCOPE_TAG_MAXLEN = 40;
+const NUDGE_MIN_INTERVAL_MS = 20 * 3_600_000; // ≤1 gentle nudge / 20h
 const SIGNAL_RETENTION_DAYS = 90;
 const DEFAULT_HALF_LIFE_DAYS = 30;
 const SWEEP_INTERVAL_MS = 7 * 86_400_000;
@@ -220,19 +227,34 @@ export class ProfileDO extends DurableObject<Env> {
   // §5 trust ladder, server-side gate. Deliberately conservative: the
   // failure mode is a story arriving later in a digest, never a ping
   // during a funeral.
-  async isInterruptible(priority: 1 | 2 | 3, nowMs = Date.now()): Promise<InterruptVerdict> {
-    if (priority < 3) return { decision: "digest", reason: "only priority-3 may interrupt" };
-
+  async isInterruptible(
+    priority: 1 | 2 | 3, nowMs = Date.now(), opts: { scopeNudge?: boolean } = {},
+  ): Promise<InterruptVerdict> {
     const meta = new Map(
       this.ctx.storage.sql
-        .exec<{ key: string; value: string }>("SELECT key, value FROM meta WHERE key IN ('state','state_at')")
+        .exec<{ key: string; value: string }>("SELECT key, value FROM meta WHERE key IN ('state','state_at','nudge_last_at')")
         .toArray()
         .map((r) => [r.key, r.value]),
     );
     const state = meta.get("state") as CoarseState | undefined;
     const stateAt = Number(meta.get("state_at") ?? 0);
+    const fresh = !!state && !!stateAt && nowMs - stateAt <= STATE_FRESH_MS;
 
-    if (!state || !stateAt || nowMs - stateAt > STATE_FRESH_MS) {
+    // Gentle scope-nudge tier (Wave B, OFF by default) — a STRICTLY NARROWER rung
+    // than p3: only "open" (NOT commuting), ≤1/20h, asleep held. Never edits the
+    // p3 gate below; a non-opt-in caller never reaches here (routeNudges gates it).
+    if (opts.scopeNudge && priority === 2) {
+      const lastNudge = Number(meta.get("nudge_last_at") ?? 0);
+      if (nowMs - lastNudge < NUDGE_MIN_INTERVAL_MS) return { decision: "digest", reason: "already nudged you today — this one's in your feed" };
+      if (!fresh) return { decision: "digest", reason: "held to your feed — you weren't clearly free" };
+      if (state === "asleep") return { decision: "silent", reason: "asleep — held for the morning edition" };
+      if (state === "open") return { decision: "interrupt", reason: "a quiet heads-up — this is in your area and you're free" };
+      return { decision: "digest", reason: `held back — ${state}` };
+    }
+
+    // ---- p3 interrupt gate (unchanged) ----
+    if (priority < 3) return { decision: "digest", reason: "only priority-3 may interrupt" };
+    if (!fresh) {
       return { decision: "digest", reason: "state unknown or stale (>30m) — unknown always demotes" };
     }
     if (state === "asleep") return { decision: "silent", reason: "asleep — held for the morning edition" };
@@ -489,6 +511,50 @@ export class ProfileDO extends DurableObject<Env> {
       : list.map((s) => (s.id === String(id) ? { ...s, weight: Math.min(3, Math.max(1, w)) } : s));
     this.writeSearches(next);
     return next;
+  }
+
+  // ---- Scope tags + gentle-nudge opt-in (Wave B want/need) -----------------
+  // meta['scope_tags'] JSON [{tag, vec}] — coarse EXTERNAL anchors (place / org /
+  // sector) the user volunteers; vectors NEVER leave the DO. Wiped by purge().
+  private readScopeTags(): ScopeTag[] {
+    const row = this.ctx.storage.sql.exec<{ value: string }>("SELECT value FROM meta WHERE key = 'scope_tags'").toArray()[0];
+    if (!row) return [];
+    try { const a = JSON.parse(row.value); return Array.isArray(a) ? a : []; } catch { return []; }
+  }
+  private writeScopeTags(list: ScopeTag[]): void {
+    this.ctx.storage.sql.exec("INSERT INTO meta (key, value) VALUES ('scope_tags', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", JSON.stringify(list));
+  }
+  async getScopeTags(): Promise<ScopeTag[]> { return this.readScopeTags(); }
+
+  async addScopeTag(tag: string, vec: number[] | null): Promise<{ tags: ScopeTag[]; added: boolean; reason?: string }> {
+    const clean = String(tag ?? "").replace(/[\u0000-\u001f<>]/g, "").replace(/\s+/g, " ").trim().slice(0, SCOPE_TAG_MAXLEN);
+    if (clean.length < 2) return { tags: this.readScopeTags(), added: false, reason: "empty" };
+    const list = this.readScopeTags();
+    if (list.some((t) => t.tag.toLowerCase() === clean.toLowerCase())) return { tags: list, added: false, reason: "duplicate" };
+    if (list.length >= MAX_SCOPE_TAGS) return { tags: list, added: false, reason: "cap" };
+    list.push({ tag: clean, vec: vec ?? null });
+    this.writeScopeTags(list);
+    await this.markOnboarded(); // a scope tag is a real, durable choice
+    return { tags: list, added: true };
+  }
+  async removeScopeTag(tag: string): Promise<ScopeTag[]> {
+    const key = String(tag ?? "").toLowerCase();
+    const next = this.readScopeTags().filter((t) => t.tag.toLowerCase() !== key);
+    this.writeScopeTags(next);
+    return next;
+  }
+
+  // The gentle scope-nudge is OFF by default; a user must explicitly turn it on.
+  async getScopeNudge(): Promise<boolean> {
+    const row = this.ctx.storage.sql.exec<{ value: string }>("SELECT value FROM meta WHERE key = 'scope_nudge'").toArray()[0];
+    return row?.value === "1";
+  }
+  async setScopeNudge(on: boolean): Promise<boolean> {
+    this.ctx.storage.sql.exec("INSERT INTO meta (key, value) VALUES ('scope_nudge', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", on ? "1" : "0");
+    return on;
+  }
+  async markNudged(nowMs = Date.now()): Promise<void> {
+    this.ctx.storage.sql.exec("INSERT INTO meta (key, value) VALUES ('nudge_last_at', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", String(nowMs));
   }
 
   // Nightly NDJSON sweep (RUNBOOK §4): DO-SQLite has no platform export, so

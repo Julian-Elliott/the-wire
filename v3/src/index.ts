@@ -8,7 +8,7 @@ import {
 } from "./lib/persona-token";
 import { clampPitch, cleanPitches, pickSummary, type PitchLevel } from "./lib/pitch";
 import { analyseDesk, buildCentroid, centre, meanVector, type DeskAnalysis } from "./lib/preference";
-import { rankStories, whyRanked, recencyFactor, type RankableStory } from "./lib/rank";
+import { rankStories, whyRanked, recencyFactor, stakesOf, NEED_THRESHOLD, NEED_MARK_CAP, type RankableStory } from "./lib/rank";
 import { runSignals } from "./signals";
 import { dedupeBatch, isStale, titleKey, urlKey } from "./lib/dedup";
 import { SUMMARY_MAX, TITLE_STORE_MAX, URL_STORE_MAX, cleanDeskId } from "./lib/text";
@@ -87,6 +87,11 @@ const profileStub = (env: Env, uid: string) =>
     getSearches(): Promise<SavedSearchRow[]>;
     addSearch(q: string, vec: number[] | null, weight?: number): Promise<{ searches: SavedSearchRow[]; added: boolean; reason?: string }>;
     setSearchWeight(id: string, weight: number): Promise<SavedSearchRow[]>;
+    getScopeTags(): Promise<{ tag: string; vec: number[] | null }[]>;
+    addScopeTag(tag: string, vec: number[] | null): Promise<{ tags: { tag: string; vec: number[] | null }[]; added: boolean; reason?: string }>;
+    removeScopeTag(tag: string): Promise<{ tag: string; vec: number[] | null }[]>;
+    getScopeNudge(): Promise<boolean>;
+    setScopeNudge(on: boolean): Promise<boolean>;
     getPitches(): Promise<Record<string, number>>;
     setPitch(desk: string, level: number): Promise<Record<string, number>>;
     getCatchupAt(): Promise<string | null>;
@@ -540,11 +545,12 @@ async function rankedForUser(
   const items = await newsroom(env).feed(poolLimit, uid);
   const nr = env.NEWSROOM.get(env.NEWSROOM.idFromName("main")) as unknown as NewsroomEmbeds;
   const pstub = profileStub(env, uid);
-  const [withVecs, followState, pitchPrefs, savedSearches] = await Promise.all([
+  const [withVecs, followState, pitchPrefs, savedSearches, scopeTags] = await Promise.all([
     nr.feedWithEmbeddings(Math.max(poolLimit, 100)),
     pstub.getFollowState(),
     pstub.getPitches(),
     pstub.getSearches(),
+    pstub.getScopeTags(),
   ]);
   const { follows, onboarded } = followState;
   const vecById = new Map(withVecs.map((r) => [r.story_id, r.vec]));
@@ -582,6 +588,25 @@ async function rankedForUser(
     }
   }
 
+  // Scope-tag anchors (Wave B want/need) — coarse EXTERNAL anchors matched with
+  // the SAME engine as saved searches (semantic when a vector exists, else
+  // whole-token lexical), iterating `items` ONLY (=== feed(uid), the gate).
+  const anchors = scopeTags.map((t) => ({
+    tag: t.tag, vec: t.vec ? Float32Array.from(t.vec) : null,
+    tokens: queryTokens(t.tag), normQ: normalizeQuery(t.tag),
+  }));
+  const scopeTagById = new Map<string, string>();
+  if (anchors.length) {
+    for (const s of items) {
+      const raw = vecById.get(s.story_id);
+      const storyVec = raw ? Float32Array.from(raw) : null;
+      const text = normalizeQuery(s.title + " " + s.summary);
+      for (const a of anchors) {
+        if (scoreAgainstQuery(a.vec, a.tokens, a.normQ, storyVec, text, SAVED_COS_MIN).hit) { scopeTagById.set(s.story_id, a.tag); break; }
+      }
+    }
+  }
+
   const followed = Object.keys(follows).length > 0;
   // The original three-branch gate. A saved search only ever ADDS ids already
   // in `items`, so the feed can never widen past feed(uid).
@@ -591,7 +616,43 @@ async function rankedForUser(
     followed ? (s.priority === 3 || follows[s.desk] !== undefined)
     : onboarded ? s.priority === 3
     : true;
-  const visible = items.filter((s) => matchesBase(s) || searchHitById.has(s.story_id));
+
+  // ---- Need-to-know: stakes × scope, anchor-only (the "Worth knowing" band) --
+  // need = stakes(story) × scope(story,user). Scope is ANCHOR-ONLY (home/audience,
+  // saved search, opt-in scope tag) — follows & affinity NEVER count, so ordinary
+  // browsing can't manufacture need. Computed over the WHOLE pool BEFORE `visible`
+  // so the ≤NEED_MARK_CAP marked stories can surface even on desks you don't
+  // follow — but only those few, so a tagged sector can never flood the feed.
+  const scopeOf = (s: FeedRow): { v: number; why: string } => {
+    if (s.audience === uid) return { v: 1.0, why: "near your home" };
+    const hit = searchHitById.get(s.story_id);
+    if (hit) return { v: 0.9, why: `you watch “${hit.q}”` };
+    const tag = scopeTagById.get(s.story_id);
+    if (tag) return { v: 0.85, why: `affects ${tag}` };
+    return { v: 0, why: "" };
+  };
+  const needById = new Map<string, number>();
+  const needWhyById = new Map<string, string>();
+  const needCand: { id: string; need: number }[] = [];
+  for (const s of items) {
+    if (s.priority === 3) continue; // p3 is already the Urgent band
+    const sc = scopeOf(s);
+    if (sc.v === 0) continue; // no concrete anchor ⇒ pure want-to-know
+    const stakes = stakesOf(s.salience, s.priority);
+    const need = stakes * sc.v;
+    if (need < NEED_THRESHOLD) continue;
+    needById.set(s.story_id, need);
+    needWhyById.set(s.story_id, `${stakes >= 0.8 ? "High-impact" : "Significant"} · ${sc.why}`);
+    needCand.push({ id: s.story_id, need });
+  }
+  // Cap BEFORE marking — even a flood of in-scope stories yields ≤NEED_MARK_CAP.
+  const needMarked = new Set(needCand.sort((a, b) => b.need - a.need).slice(0, NEED_MARK_CAP).map((c) => c.id));
+
+  // A user's OWN audience-scoped local story (privacy-gated inside feed()) plus
+  // the ≤3 need-marked stories are always visible, so need-to-know reaches you
+  // even outside your follows — bounded to those few. With no scope set,
+  // needMarked is empty ⇒ `visible` is byte-for-byte today's.
+  const visible = items.filter((s) => matchesBase(s) || searchHitById.has(s.story_id) || s.audience === uid || needMarked.has(s.story_id));
 
   const rankable: (RankableStory & { src: FeedRow })[] = visible.map((s) => ({
     id: s.story_id, desk: s.desk, salience: s.salience,
@@ -620,15 +681,23 @@ async function rankedForUser(
         ? hit.weight * r.components.salience * r.components.recency * (1 + SEARCH_LAMBDA * hit.queryCos)
         : r.score);
   }
+
+  // Three tiers: p3 Urgent (2) → Worth-knowing (1) → want-to-know (0). The need
+  // tiebreak is gated to MARKED members only (verify fix), so unmarked want
+  // stories keep today's effScore order byte-for-byte.
+  const tierOf = (r: (typeof ranked)[number]) =>
+    r.story.src.priority === 3 ? 2 : needMarked.has(r.story.src.story_id) ? 1 : 0;
+  const nb = (id: string) => (needMarked.has(id) ? needById.get(id) ?? 0 : 0);
   ranked.sort((a, b) => {
-    const pa = a.story.src.priority === 3 ? 1 : 0;
-    const pb = b.story.src.priority === 3 ? 1 : 0;
-    return pb - pa || effScore.get(b)! - effScore.get(a)!;
+    const ta = tierOf(a), tb = tierOf(b);
+    if (tb !== ta) return tb - ta;
+    return nb(b.story.src.story_id) - nb(a.story.src.story_id) || effScore.get(b)! - effScore.get(a)!;
   });
   const shaped = ranked.map((r) => {
     const level = clampPitch(pitchPrefs[r.story.desk] ?? 1);
     const hit = searchHitById.get(r.story.src.story_id);
     const searchOnly = !!hit && !matchesBase(r.story.src); // tag ONLY when it arrived via search
+    const wk = needMarked.has(r.story.src.story_id);
     return shapeStory(r.story.src, {
       summary: pickSummary(r.story.src, level),
       pitch: level as PitchLevel,
@@ -636,6 +705,8 @@ async function rankedForUser(
       // A search-only story's reason is the search, not its (unfollowed) desk.
       rankWhy: searchOnly ? `matches your saved search “${hit!.q}”` : whyRanked(r.components, r.story.desk),
       searchQ: searchOnly ? hit!.q : undefined, // spread by shapeStory; undefined ⇒ omitted from JSON
+      worthKnowing: wk || undefined,
+      needWhy: wk ? needWhyById.get(r.story.src.story_id) : undefined,
     });
   });
   return { items: shaped, onboarded };
@@ -662,6 +733,19 @@ app.get("/api/feed/latest", async (c) => {
 // A finite, capped, self-announcing edition — the calm antidote to the
 // infinite feed. The top few stories that matter, NEW since you last caught
 // up; when there's nothing new, it says so. LLM-free (reuses the ranking).
+// ---- Scope catalog + Article-9 screen (Wave B want/need) -------------------
+// The pick-list a user chooses "your world" anchors from: economic / civic /
+// environmental sectors + locality ONLY. It contains NO health, politics/belief,
+// religion, sexuality, race, trade-union or biometric desk — so a PICK can never
+// express a GDPR Article-9 special category (a structural guarantee).
+const SCOPE_CATALOG = ["energy", "transport", "business", "markets", "tech", "science", "climate", "weather", "planning"] as const;
+// The free-text slot is screened. Stems are PREFIX matches (leading \b, NO
+// trailing \b) — a trailing boundary never fires mid-word, so "diabetes",
+// "pregnant", "religion" would all slip through (verify blocker). Over-blocking a
+// benign term is acceptable (the user rephrases); under-blocking is a privacy hole.
+const ART9_BLOCK = /\b(health|medic|clinic|disease|diagnos|symptom|therap|psych|disab|pregnan|hiv|cancer|diabet|asthma|religio|christian|muslim|islam|jewish|catholic|hindu|buddhis|atheis|gay|lesbian|bisexual|transgender|sexual|ethnic|racial|trade.?union|biometric)/i;
+const isArticle9Term = (x: string): boolean => ART9_BLOCK.test(x);
+
 const CATCHUP_CAP = 7;
 
 app.get("/api/feed/catchup", async (c) => {
@@ -996,6 +1080,38 @@ app.post("/api/me/searches", async (c) => {
   const [vec] = await embedTexts(c.env.AI, [q]); // null ⇒ a lexical-only saved search
   const res = await stub.addSearch(q, vec ? [...vec] : null, p.weight !== undefined ? Number(p.weight) : 1);
   return c.json({ ok: res.added, reason: res.reason, searches: project(res.searches) });
+});
+
+// ---- "Your world" scope (Wave B want/need) ---------------------------------
+// Coarse EXTERNAL anchors that make a story need-to-know FOR THIS USER. GET
+// returns the catalog + the user's tags (never the vectors) + the nudge toggle.
+app.get("/api/me/scope", async (c) => {
+  const sess = await sessionOf(c);
+  if (!sess) return c.json({ ok: false, error: "sign in required" }, 401);
+  const stub = profileStub(c.env, sess.uid);
+  const [tags, nudge] = await Promise.all([stub.getScopeTags(), stub.getScopeNudge()]);
+  return c.json({ ok: true, catalog: SCOPE_CATALOG, nudge, tags: tags.map((t) => ({ tag: t.tag })) });
+});
+
+// POST: {nudge} toggles the opt-in gentle nudge; {remove} drops a tag; {add}
+// adds one — screened against Article-9 terms (422) and embedded once.
+app.post("/api/me/scope", async (c) => {
+  const sess = await sessionOf(c);
+  if (!sess) return c.json({ ok: false, error: "sign in required" }, 401);
+  const bodyText = await readBodyBounded(c.req.raw, 2 * 1024);
+  if (bodyText === null) return c.json({ ok: false, error: "payload too large" }, 413);
+  let p: { add?: string; remove?: string; nudge?: boolean };
+  try { p = JSON.parse(bodyText); } catch { return c.json({ ok: false, error: "invalid JSON" }, 400); }
+  const stub = profileStub(c.env, sess.uid);
+  const proj = (t: { tag: string }[]) => t.map((x) => ({ tag: x.tag }));
+  if (typeof p.nudge === "boolean") return c.json({ ok: true, nudge: await stub.setScopeNudge(p.nudge) });
+  if (typeof p.remove === "string" && p.remove) return c.json({ ok: true, tags: proj(await stub.removeScopeTag(p.remove)) });
+  const raw = String(p.add ?? "").replace(/\s+/g, " ").trim().slice(0, 40);
+  if (raw.length < 2) return c.json({ ok: false, error: "tag too short" }, 400);
+  if (isArticle9Term(raw)) return c.json({ ok: false, error: "scope is places & organisations only — nothing about health or beliefs" }, 422);
+  const [vec] = await embedTexts(c.env.AI, [raw]); // null ⇒ a lexical-only anchor
+  const res = await stub.addScopeTag(raw, vec ? [...vec] : null);
+  return c.json({ ok: res.added, reason: res.reason, tags: proj(res.tags) });
 });
 
 // ---- Web Push (personas' #2: reach every user, not just ntfy) --------------

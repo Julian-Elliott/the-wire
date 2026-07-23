@@ -55,6 +55,12 @@
   .desk { color: var(--dim); text-transform: uppercase; letter-spacing: .08em; font-weight: 600; font-size: 12px; }
   .badge { color: var(--saga); border: 1px solid var(--saga); border-radius: 4px; padding: 0 6px; font-size: 12px; }
   .badge.urgent { color: var(--urgent); border-color: var(--urgent); }
+  /* Worth-knowing (Wave B want/need): a QUIET accent border — never the filled
+     red Urgent style — plus a visible, load-bearing reason line (not hover-only). */
+  .badge.wk { color: var(--accent); border-color: var(--accent); }
+  .wkwhy { margin: 4px 0 0; color: var(--accent); font-size: 13px; }
+  .dp-chips, .dp-catalog { display: flex; gap: 6px; flex-wrap: wrap; margin: 0 0 8px; }
+  .dp-w.chip { border-color: var(--accent); color: var(--accent); }
   /* Provenance leads: the outlet name is the anchor; the mark is a small shape
      signal (colour is only ever a redundant scan cue). */
   .src { display: inline-flex; align-items: center; gap: 5px; }
@@ -475,11 +481,17 @@
     const panel = $("panel");
     panel.innerHTML = '<div class="dp-title">Choose the topics you follow</div><div class="dp-body">Loading…</div>';
     try {
-      const res = await fetch("/api/me/desks");
-      const d = await res.json();
+      const [d, scope, area] = await Promise.all([
+        fetch("/api/me/desks").then((r) => r.json()),
+        fetch("/api/me/scope").then((r) => r.json()),
+        fetch("/api/me/area").then((r) => r.json()),
+      ]);
       const follows = d.follows || {};
       const pitches = d.pitches || {};
       const searches = d.searches || []; // saved searches join the feed like desks (Wave A #5)
+      const tags = scope.tags || []; // "Your world" anchors (Wave B want/need)
+      const tagset = new Set(tags.map((t) => t.tag.toLowerCase()));
+      const catalog = scope.catalog || []; const nudge = !!scope.nudge; const hasArea = !!(area && area.area);
       const followed = Object.keys(follows).sort();
       const notFollowed = (d.available || []).filter((x) => follows[x] === undefined).sort();
       const PITCH_LABELS = { 0: "Explain it", 1: "Normal", 2: "Insider" };
@@ -521,9 +533,21 @@
           : '<p style="color:var(--dim);margin:8px 0">You’re only seeing urgent news right now. Pick the topics you want below and they’ll fill your feed.</p>') +
         (notFollowed.length ? `<h2 class="dp-sub">Add a topic</h2>${notFollowed.map(addRow).join("")}` : "") +
         (searches.length ? `<h2 class="dp-sub">Saved searches</h2>${searches.map(searchRow).join("")}` : "") +
+        '<h2 class="dp-sub">Your world</h2>' +
+        '<p style="color:var(--dim);font-size:13px;margin:0 0 8px">What actually bears on you — used only to mark a few stories “Worth knowing”. Places and organisations only — nothing about health or beliefs.</p>' +
+        `<div class="dp-row"><span class="dp-name">📍 Home area${hasArea ? " ✓" : ""}</span><span class="dp-weights"><button type="button" class="dp-w dp-add" id="world-area">${hasArea ? "Update" : "Use my area"}</button>${hasArea ? '<button type="button" class="dp-w" id="world-area-clear">Clear</button>' : ""}</span></div>` +
+        '<p style="color:var(--dim);font-size:12px;margin:0 0 8px">We keep only a ~110 m rounded point.</p>' +
+        (tags.length ? `<div class="dp-chips">${tags.map((t) => `<button type="button" class="dp-w chip" data-removetag="${esc(t.tag)}" aria-label="Remove ${esc(t.tag)} from your world">${esc(t.tag)} ✕</button>`).join("")}</div>` : "") +
+        `<div class="dp-catalog">${catalog.filter((c) => !tagset.has(String(c).toLowerCase())).map((c) => `<button type="button" class="dp-w" data-addtag="${esc(c)}" aria-label="Add ${esc(deskLabel(c))} to your world">+ ${esc(deskLabel(c))}</button>`).join("")}</div>` +
+        '<div class="dp-row"><input class="srch-input" id="world-input" type="text" maxlength="40" placeholder="Add an employer, town or sector" aria-label="Add a place or organisation to your world"><button type="button" class="dp-w dp-add" id="world-add">Add</button></div>' +
+        `<div class="dp-row"><span class="dp-name">🔔 Gentle nudges</span><button type="button" class="dp-w" id="world-nudge" aria-pressed="${nudge}">${nudge ? "On" : "Off"}</button></div>` +
+        '<p style="color:var(--dim);font-size:12px;margin:0">At most once a day, only when you’re free. Off by default.</p>' +
         "</div>";
       $("dp-close").addEventListener("click", closeDesks);
-      panel.querySelectorAll(".dp-w").forEach((b) =>
+      // Generic delegation is SCOPED to desk/search buttons only — the "Your
+      // world" buttons below carry .dp-w too and must NOT fire this handler
+      // (verify major: it would POST {desk:undefined} on every world click).
+      panel.querySelectorAll("[data-desk],[data-search]").forEach((b) =>
         b.addEventListener("click", async () => {
           const isSearch = b.dataset.search !== undefined;
           const url = isSearch ? "/api/me/searches" : "/api/me/desks";
@@ -540,6 +564,20 @@
           } catch { /* re-render shows current state anyway */ }
           renderDesksPanel();
         }));
+      // "Your world" wiring — dedicated handlers (not the generic delegation).
+      const postScope = async (body) => {
+        try { await fetch("/api/me/scope", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }); } catch { /* re-render shows state */ }
+        renderDesksPanel();
+      };
+      const wa = $("world-area"); if (wa) wa.addEventListener("click", (e) => setHomeArea(e));
+      const wac = $("world-area-clear"); if (wac) wac.addEventListener("click", async () => {
+        try { await fetch("/api/me/area", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ lat: null, lon: null }) }); } catch { /* re-render */ }
+        renderDesksPanel();
+      });
+      const wadd = $("world-add"); if (wadd) wadd.addEventListener("click", () => { const v = ($("world-input").value || "").trim(); if (v) postScope({ add: v }); });
+      const wn = $("world-nudge"); if (wn) wn.addEventListener("click", () => postScope({ nudge: !nudge }));
+      panel.querySelectorAll("[data-addtag]").forEach((b) => b.addEventListener("click", () => postScope({ add: b.dataset.addtag })));
+      panel.querySelectorAll("[data-removetag]").forEach((b) => b.addEventListener("click", () => postScope({ remove: b.dataset.removetag })));
     } catch { panel.innerHTML = '<div class="dp-body">Could not load your topics. Please try again.</div>'; }
   }
 
@@ -706,6 +744,7 @@
           </span>
           ${p.type === "civic" ? '<span class="badge type">Official record</span>' : ""}
           ${i.priority === 3 ? '<span class="badge urgent">Urgent</span>' : ""}
+          ${i.worthKnowing ? '<span class="badge wk">Worth knowing</span>' : ""}
           ${i.saga ? '<span class="badge">Ongoing story</span>' : ""}
           ${i.searchQ ? `<span class="badge">🔎 ${esc(i.searchQ)}</span>` : ""}
           ${showDesk ? `<span class="desk">${esc(deskName)}</span>` : ""}
@@ -713,9 +752,10 @@
           ${i.rankWhy ? `<span class="rankwhy" tabindex="0" title="Why you're seeing this: ${esc(i.rankWhy)}" aria-label="Why you're seeing this: ${esc(i.rankWhy)}">★</span>` : ""}
         </p>
         <h2><a href="${esc(safeUrl(i.url))}" target="_blank" rel="noopener noreferrer">${esc(i.title)}</a></h2>
+        ${i.worthKnowing && i.needWhy ? `<p class="wkwhy">Worth knowing for you — ${esc(i.needWhy)}</p>` : ""}
         <p class="summary">${esc(i.summary)}</p>
         ${i.why ? `<p class="why">Why it matters: ${esc(i.why)}</p>` : ""}
-        ${held[i.id] ? `<p class="held">Held back from an alert — ${esc(held[i.id])}</p>` : ""}
+        ${held[i.id] ? `<p class="held">${i.priority === 3 ? "Held back from an alert" : "Held back from a gentle nudge"} — ${esc(held[i.id])}${i.worthKnowing ? " · it's here in your Worth knowing" : ""}</p>` : ""}
         ${i.quote ? `<blockquote>“${esc(i.quote)}”</blockquote>` : ""}
       </article></li>`;
   }

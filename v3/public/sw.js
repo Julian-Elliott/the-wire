@@ -5,12 +5,14 @@ self.addEventListener("push", (event) => {
   try { d = event.data ? event.data.json() : {}; } catch (_) { d = { body: event.data && event.data.text() }; }
   const title = d.title || "The Wire";
   const body = d.why ? `${d.body || ""}\n\nwhy: ${d.why}` : (d.body || "");
+  const gentle = !!d.gentle; // Wave B scope-nudge: quieter than a p3 alert
   event.waitUntil(
     self.registration.showNotification(title, {
       body,
-      tag: d.url || title,          // collapse duplicates of the same story
+      tag: gentle ? "wire-gentle" : (d.url || title), // collapse duplicates
       data: { url: d.url || "/" },
       requireInteraction: false,
+      silent: gentle,             // a gentle heads-up never buzzes/pings
     }),
   );
 });
