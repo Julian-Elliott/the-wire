@@ -47,6 +47,16 @@ describe("Instant search endpoint", () => {
     expect(none.count).toBe(0);
   });
 
+  it("entity echo matches whole words only, never a substring (Iran ≠ Miranda)", async () => {
+    await (env as Record<string, any>).KV.put("ent:persiax", "Iran"); // a short canonical label
+    await ingest([story("ee-iran", "world", "Iran signs a new accord"), story("ee-miranda", "world", "Miranda rights case argued")]);
+    const b = await getj("apple:ee", "/api/search?q=persiax");
+    expect(b.resolvedTo).toBe("Iran");
+    const ids = (b.items || []).map((i: any) => i.id);
+    expect(ids).toContain("ee-iran"); // whole word "iran" present
+    expect(ids).not.toContain("ee-miranda"); // "iran" only inside "Miranda" ⇒ excluded
+  });
+
   it("honours the privacy gate — never another user's audience-scoped story", async () => {
     await ingest([story("sa-secret", "world", "Secret widget recall notice", { audience: "apple:userB" })]);
     const asA = await getj("apple:userA", "/api/search?q=widget");

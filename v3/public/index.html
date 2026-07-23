@@ -313,7 +313,8 @@
     if (!data.ok) { status.textContent = "Sign in to search."; return; }
     const list = data.items || []; currentItems = list; // so result link-outs markRead + telemetry work
     if (!list.length) { results.innerHTML = ""; status.textContent = "No current stories match “" + q + "”. Try a broader word — or check back as new stories arrive."; return; }
-    status.textContent = data.count + (data.count === 1 ? " story" : " stories") + " match “" + q + "”" + (data.ai ? "" : " (matching by words)");
+    const echo = data.resolvedTo ? " · " + data.resolvedTo : ""; // entity echo (Wave A #6): Messi → Lionel Messi
+    status.textContent = data.count + (data.count === 1 ? " story" : " stories") + " match “" + q + "”" + echo + (data.ai ? "" : " (matching by words)");
     results.innerHTML = list.map((i) => searchResultCard(i, q)).join("");
     results.querySelectorAll(".srch-add").forEach((b) => b.addEventListener("click", () => saveSearch(input.value.trim(), b)));
   }

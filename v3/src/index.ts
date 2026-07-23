@@ -18,6 +18,7 @@ import {
   SEARCH_CAP, SEARCH_COS_MIN, SAVED_COS_MIN,
   normalizeQuery, queryTokens, scoreAgainstQuery,
 } from "./lib/search";
+import { entityEcho, normalizeEntity, warmEntities } from "./lib/entities";
 import { canonHost, canonUrl } from "./lib/urls";
 import { validateBatch, type IngestItem } from "./lib/validate";
 import {
@@ -384,6 +385,14 @@ app.post("/api/ingest", async (c) => {
     ? await newsroom(c.env).ingestBatch(rows)
     : { inserted: 0, clusterDups: 0, sagaLinked: 0 };
 
+  // 6b. Write-time entity echo (Wave A #6): warm the Wikidata-QID cache from
+  // the accepted titles so search can echo "Messi → Lionel Messi" from a pure
+  // cache read. Fire-and-forget + hard-capped — it must NEVER block or fail an
+  // edition (graceful absence, like embeddings).
+  if (accepted.length) {
+    c.executionCtx.waitUntil(warmEntities(c.env, accepted.map((it) => it.title)));
+  }
+
   // 7. Heartbeat + alarms. Rejects and overflow are loud, never silent.
   await c.env.KV.put("hb:ingest", nowIso);
   if (outcome.rejected.length || overflow > 0) {
@@ -719,19 +728,30 @@ app.get("/api/search", async (c) => {
 
   const qTokens = queryTokens(q);
   const normQ = normalizeQuery(q);
+  // Entity echo (Wave A #6): canonical label from the write-time-warmed cache
+  // (pure KV read, no Wikidata call on the live path). A story that literally
+  // names the canonical entity also matches, even across surface forms.
+  const resolved = await entityEcho(c.env, q);
+  const echoNorm = resolved ? normalizeEntity(resolved) : "";
   const now = Date.now();
   const scored: { s: FeedRow; score: number }[] = [];
   for (const s of pool) {
     const raw = vecById.get(s.story_id); // pool ids only — the gate is honoured
     const storyVec = raw ? Float32Array.from(raw) : null;
-    const r = scoreAgainstQuery(queryVec, qTokens, normQ, storyVec, normalizeQuery(s.title + " " + s.summary), SEARCH_COS_MIN);
-    if (!r.hit) continue;
+    const text = normalizeQuery(s.title + " " + s.summary);
+    const r = scoreAgainstQuery(queryVec, qTokens, normQ, storyVec, text, SEARCH_COS_MIN);
+    // Whole-word/phrase match only (len>=3) — a raw substring would pull in
+    // "Miranda" for a query resolving to "Iran" (the exact trap lib/search.ts
+    // avoids). Echo-only hits rank respectably but never above a strong semantic.
+    const echoHit = echoNorm.length >= 3 && (" " + text + " ").includes(" " + echoNorm + " ");
+    if (!r.hit && !echoHit) continue;
+    const base = echoHit ? Math.max(r.score, 0.7) : r.score;
     const rec = recencyFactor(now - (Date.parse(s.added_at) || now)); // gentle freshness tilt
-    scored.push({ s, score: r.score * (0.7 + 0.3 * rec) });
+    scored.push({ s, score: base * (0.7 + 0.3 * rec) });
   }
   scored.sort((a, b) => b.score - a.score);
   const items = scored.slice(0, SEARCH_CAP).map(({ s }) => shapeStory(s));
-  return c.json({ ok: true, ai: queryVec != null, q, count: items.length, items });
+  return c.json({ ok: true, ai: queryVec != null, q, resolvedTo: resolved || undefined, count: items.length, items });
 });
 
 app.get("/", (c) =>
