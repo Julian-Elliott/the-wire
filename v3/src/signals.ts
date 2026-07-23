@@ -11,6 +11,7 @@
 
 import type { Env } from "./env";
 import { pollCarbon, pollOctopus } from "./lib/signals/energy";
+import { pollFloods } from "./lib/signals/floods";
 import { pollPlanit } from "./lib/signals/planit";
 import type { Fetcher, PollerResult, Trigger } from "./lib/signals/types";
 import { pollWeather } from "./lib/signals/weather";
@@ -253,11 +254,10 @@ export async function routeNudges(
 // own uid-salted, audience-scoped triggers so nothing leaks into the
 // global feed. Falls back to a single global operator-area poll only while
 // no user has set an area (the pre-per-user behaviour, unchanged).
-async function planningTasks(
-  env: Env,
-  fetcher: Fetcher,
-  fallback: { lat: number; lon: number },
-): Promise<Array<() => Promise<PollerResult>>> {
+// One radius query per DISTINCT user home area; users sharing a rounded area
+// share the query, and each gets their OWN uid-salted audience-scoped triggers
+// so nothing leaks into the global feed. Shared by planning + flood pollers.
+async function userAreas(env: Env): Promise<Map<string, { lat: number; lon: number; uids: string[] }>> {
   const users = await env.DB.prepare("SELECT uid FROM users").all<{ uid: string }>();
   const byArea = new Map<string, { lat: number; lon: number; uids: string[] }>();
   for (const { uid } of users.results.slice(0, 50)) {
@@ -271,9 +271,16 @@ async function planningTasks(
     cur.uids.push(uid);
     byArea.set(key, cur);
   }
-  if (!byArea.size) return [() => pollPlanit(fallback, fetcher)];
-  return [...byArea.values()].slice(0, 20).map((a) => async () => {
-    const res = await pollPlanit({ lat: a.lat, lon: a.lon }, fetcher);
+  return byArea;
+}
+
+// Turn a per-area poll into per-user audience-scoped tasks (uid-salted dedup).
+const perUserAreaTasks = (
+  byArea: Map<string, { lat: number; lon: number; uids: string[] }>,
+  poll: (a: { lat: number; lon: number }) => Promise<PollerResult>,
+) =>
+  [...byArea.values()].slice(0, 20).map((a) => async (): Promise<PollerResult> => {
+    const res = await poll({ lat: a.lat, lon: a.lon });
     return {
       backend: res.backend,
       triggers: a.uids.flatMap((uid) =>
@@ -281,6 +288,23 @@ async function planningTasks(
       ),
     };
   });
+
+async function planningTasks(
+  env: Env,
+  fetcher: Fetcher,
+  fallback: { lat: number; lon: number },
+): Promise<Array<() => Promise<PollerResult>>> {
+  const byArea = await userAreas(env);
+  if (!byArea.size) return [() => pollPlanit(fallback, fetcher)];
+  return perUserAreaTasks(byArea, (a) => pollPlanit(a, fetcher));
+}
+
+// Flood warnings are inherently local — NO global fallback (a flood 15 km from
+// the operator is irrelevant to a user elsewhere), so only per-user areas poll.
+async function floodTasks(env: Env, fetcher: Fetcher): Promise<Array<() => Promise<PollerResult>>> {
+  const byArea = await userAreas(env);
+  if (!byArea.size) return [];
+  return perUserAreaTasks(byArea, (a) => pollFloods(a, fetcher));
 }
 
 export async function runSignals(
@@ -298,6 +322,10 @@ export async function runSignals(
     { name: "carbon", run: () => pollCarbon(fetcher) },
     ...(await planningTasks(env, fetcher, { lat, lon })).map((run, i) => ({
       name: i === 0 ? "planit" : `planit:${i + 1}`,
+      run,
+    })),
+    ...(await floodTasks(env, fetcher)).map((run, i) => ({
+      name: i === 0 ? "floods" : `floods:${i + 1}`,
       run,
     })),
   ];
