@@ -10,7 +10,7 @@
     "refresh": "echo 'POST /api/refresh on your deployed URL to force a regenerate'"
   },
   "devDependencies": {
-    "wrangler": "^4.0.0"
+    "wrangler": "^4.110.0"
   }
 }
 
