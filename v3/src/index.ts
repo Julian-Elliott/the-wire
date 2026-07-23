@@ -739,6 +739,18 @@ app.get("/api/feed/latest", async (c) => {
 // religion, sexuality, race, trade-union or biometric desk — so a PICK can never
 // express a GDPR Article-9 special category (a structural guarantee).
 const SCOPE_CATALOG = ["energy", "transport", "business", "markets", "tech", "science", "climate", "weather", "planning"] as const;
+
+// Starter packs (Wave B): curated bundles so first-run is ONE tap, while staying
+// "all chosen" (a pack is a choice, never a default). Edit this one list to
+// re-curate. Local/football desks are deliberately excluded (they're per-user,
+// served by Area + scope). Following a pack sets each desk to weight 1.
+const STARTER_PACKS: { id: string; label: string; desks: string[] }[] = [
+  { id: "essentials", label: "📰 Everyday news", desks: ["world", "uk", "business"] },
+  { id: "money", label: "💷 Money", desks: ["business", "markets", "energy"] },
+  { id: "future", label: "🔬 Science & tech", desks: ["tech", "science"] },
+  { id: "planet", label: "🌍 Climate & energy", desks: ["climate", "energy", "ev"] },
+  { id: "leisure", label: "🎭 Culture & sport", desks: ["culture", "sport", "gaming"] },
+];
 // The free-text slot is screened. Stems are PREFIX matches (leading \b, NO
 // trailing \b) — a trailing boundary never fires mid-word, so "diabetes",
 // "pregnant", "religion" would all slip through (verify blocker). Over-blocking a
@@ -1021,7 +1033,7 @@ app.get("/api/me/desks", async (c) => {
     stub.getSearches(),
   ]);
   const available = [...new Set(feed.map((s) => s.desk))].sort();
-  return c.json({ ok: true, follows, pitches, available, onboarded,
+  return c.json({ ok: true, follows, pitches, available, onboarded, packs: STARTER_PACKS,
     searches: searches.map((s) => ({ id: s.id, q: s.q, weight: s.weight })) }); // never emit vec
 });
 
@@ -1030,7 +1042,7 @@ app.post("/api/me/desks", async (c) => {
   if (!sess) return c.json({ ok: false, error: "sign in required" }, 401);
   const bodyText = await readBodyBounded(c.req.raw, 4 * 1024);
   if (bodyText === null) return c.json({ ok: false }, 413);
-  let p: { desk?: string; weight?: number; pitch?: number; onboarded?: boolean };
+  let p: { desk?: string; weight?: number; pitch?: number; onboarded?: boolean; pack?: string };
   try {
     p = JSON.parse(bodyText);
   } catch {
@@ -1040,6 +1052,17 @@ app.post("/api/me/desks", async (c) => {
   // "Start reading" with zero picks still onboards (marker only) — this is what
   // lets a user deliberately choose nothing without the chooser reappearing.
   if (p.onboarded === true) await stub.markOnboarded();
+  // Starter pack (Wave B): follow every desk in a curated bundle in one tap.
+  if (typeof p.pack === "string" && p.pack) {
+    const pack = STARTER_PACKS.find((x) => x.id === p.pack);
+    if (!pack) return c.json({ ok: false, error: "unknown pack" }, 400);
+    // ADDITIVE (review finding): only follow desks you don't already follow, so
+    // a pack never downgrades a desk you deliberately set to More/Lots.
+    let follows = await stub.getFollows();
+    for (const d of pack.desks) if (follows[d] === undefined) follows = await stub.setFollow(d, 1);
+    await stub.markOnboarded(); // the all-already-followed case still onboards
+    return c.json({ ok: true, follows, pitches: await stub.getPitches() });
+  }
   const desk = cleanDeskId(p.desk);
   if (!desk) {
     if (p.onboarded === true) {

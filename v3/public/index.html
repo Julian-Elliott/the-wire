@@ -170,6 +170,7 @@
   let onboardingActive = false;
   let chosen = {};            // desk -> 1, optimistic mirror of follows during first-run
   let available = [];         // desks offered as chips
+  let packs = [];             // starter packs (Wave B): curated one-tap bundles
   let prevPreviewIds = new Set();
   let previewTimer = null, pendingAdded = "";
   const DESK_LABELS = { world: "World", uk: "UK", politics: "Politics", business: "Business",
@@ -365,6 +366,7 @@
     catch { onboardingActive = false; say("Cannot load topics right now. Please refresh."); return; }
     chosen = d.follows || {};
     available = (d.available || []).slice().sort();
+    packs = d.packs || [];
     prevPreviewIds = new Set();
     renderChooser();
   }
@@ -374,6 +376,13 @@
     const chips = available.map((k) =>
       `<li><button type="button" class="dp-w onb-chip" aria-pressed="${chosen[k] !== undefined}" data-desk="${esc(k)}">${esc(deskLabel(k))}</button></li>`
     ).join("");
+    // Starter packs (Wave B): one tap follows a curated bundle. A calm secondary
+    // shortcut — the individual chips stay the primary "all chosen" surface.
+    const packRow = packs.length
+      ? `<p class="onb-sub" style="margin:2px 0 6px">${has ? "Or start with a pack:" : "Start with a pack:"}</p>` +
+        `<ul class="onb-chips" role="group" aria-label="Starter packs">${packs.map((p) =>
+          `<li><button type="button" class="dp-w onb-pack" data-pack="${esc(p.id)}">${esc(p.label)}</button></li>`).join("")}</ul>`
+      : "";
     $("feed").innerHTML =
       '<section class="onb" aria-labelledby="onb-h">' +
         '<h2 id="onb-h" class="onb-title" tabindex="-1">Choose a few topics to begin your feed</h2>' +
@@ -381,15 +390,40 @@
         'starts filling in below — tap as many as you like.</p>' +
         (has
           ? `<ul class="onb-chips" role="group" aria-label="Topics you can follow">${chips}</ul>`
-          : '<p class="onb-sub">We’re gathering today’s topics — nothing to choose just yet. ' +
-            'Start reading and pick topics any time from ⚙ Topics.</p>') +
-        `<p id="onbCount" class="onb-count" role="status" aria-live="polite">${has ? "Pick a topic to start your feed." : " "}</p>` +
+          : `<p class="onb-sub">We’re gathering today’s topics${packs.length ? " — start with a pack below, or check back as stories arrive" : " — nothing to choose just yet. Start reading and pick topics any time from ⚙ Topics"}.</p>`) +
+        packRow +
+        `<p id="onbCount" class="onb-count" role="status" aria-live="polite">${has ? "Pick a topic or a pack to start your feed." : " "}</p>` +
         `<button type="button" class="ctl onb-done" id="onbDone"${has ? " hidden" : ""}>${has ? "Start reading →" : "Continue →"}</button>` +
         '<ol id="onbPreview" class="feed-list onb-preview" aria-label="Your feed so far"></ol>' +
       '</section>';
     $("feed").querySelectorAll(".onb-chip").forEach((b) =>
       b.addEventListener("click", () => togglePick(b.dataset.desk)));
+    $("feed").querySelectorAll(".onb-pack").forEach((b) =>
+      b.addEventListener("click", () => pickPack(b.dataset.pack)));
     $("onbDone").addEventListener("click", finishOnboarding);
+  }
+
+  // Follow a whole starter pack in one tap during first-run.
+  async function pickPack(id) {
+    const pack = packs.find((p) => p.id === id); if (!pack) return;
+    const added = pack.desks.filter((d) => chosen[d] === undefined); // only the newly-added desks
+    added.forEach((d) => { chosen[d] = 1; }); // optimistic
+    reflectChips();
+    const done = $("onbDone"); if (done && available.length) done.hidden = Object.keys(chosen).length === 0;
+    pendingAdded = pack.label;
+    try {
+      const r = await fetch("/api/me/desks", { method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ pack: id }) });
+      if (!r.ok) throw new Error("pack failed");
+    } catch { // revert ONLY what we optimistically added — nothing was persisted
+      added.forEach((d) => { delete chosen[d]; });
+      reflectChips();
+      if (done && available.length) done.hidden = Object.keys(chosen).length === 0;
+      say("Could not add that pack. Please try again.");
+      return;
+    }
+    clearTimeout(previewTimer);
+    previewTimer = setTimeout(previewTick, 200);
   }
 
   async function togglePick(desk) {
@@ -434,7 +468,7 @@
     const n = Object.keys(chosen).length, s = currentItems.length;
     const el = $("onbCount"), done = $("onbDone");
     if (el) el.textContent = n === 0
-      ? "Pick a topic to start your feed."
+      ? "Pick a topic or a pack to start your feed."
       : `${justAdded ? "“" + deskLabel(justAdded) + "” added — " : ""}${s} ${s === 1 ? "story" : "stories"} in your feed from ${n} ${n === 1 ? "topic" : "topics"}. Add more, or start reading.`;
     if (done && available.length) done.hidden = n === 0;
   }
@@ -489,6 +523,7 @@
       const follows = d.follows || {};
       const pitches = d.pitches || {};
       const searches = d.searches || []; // saved searches join the feed like desks (Wave A #5)
+      const dpacks = d.packs || []; // starter packs (Wave B)
       const tags = scope.tags || []; // "Your world" anchors (Wave B want/need)
       const tagset = new Set(tags.map((t) => t.tag.toLowerCase()));
       const catalog = scope.catalog || []; const nudge = !!scope.nudge; const hasArea = !!(area && area.area);
@@ -532,6 +567,7 @@
           ? `<h2 class="dp-sub" style="margin-top:4px">Following</h2>${followed.map(followRow).join("")}`
           : '<p style="color:var(--dim);margin:8px 0">You’re only seeing urgent news right now. Pick the topics you want below and they’ll fill your feed.</p>') +
         (notFollowed.length ? `<h2 class="dp-sub">Add a topic</h2>${notFollowed.map(addRow).join("")}` : "") +
+        ((() => { const avail = dpacks.filter((p) => p.desks.some((x) => follows[x] === undefined)); return avail.length ? `<h2 class="dp-sub">Starter packs</h2>${avail.map((p) => `<div class="dp-row"><span class="dp-name">${esc(p.label)}<span style="color:var(--dim);font-size:12px"> · ${p.desks.map((x) => esc(deskLabel(x))).join(", ")}</span></span><button type="button" class="dp-w dp-add" data-pack="${esc(p.id)}" aria-label="Follow the ${esc(p.label)} pack">Follow all</button></div>`).join("")}` : ""; })()) +
         (searches.length ? `<h2 class="dp-sub">Saved searches</h2>${searches.map(searchRow).join("")}` : "") +
         '<h2 class="dp-sub">Your world</h2>' +
         '<p style="color:var(--dim);font-size:13px;margin:0 0 8px">What actually bears on you — used only to mark a few stories “Worth knowing”. Places and organisations only — nothing about health or beliefs.</p>' +
@@ -569,6 +605,10 @@
         try { await fetch("/api/me/scope", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }); } catch { /* re-render shows state */ }
         renderDesksPanel();
       };
+      panel.querySelectorAll("[data-pack]").forEach((b) => b.addEventListener("click", async () => {
+        try { await fetch("/api/me/desks", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ pack: b.dataset.pack }) }); } catch { /* re-render shows state */ }
+        renderDesksPanel();
+      }));
       const wa = $("world-area"); if (wa) wa.addEventListener("click", (e) => setHomeArea(e));
       const wac = $("world-area-clear"); if (wac) wac.addEventListener("click", async () => {
         try { await fetch("/api/me/area", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ lat: null, lon: null }) }); } catch { /* re-render */ }
