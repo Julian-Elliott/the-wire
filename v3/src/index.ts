@@ -1359,7 +1359,21 @@ app.get("/api/dev/scorecard", async (c) => {
   const ledger = await c.env.DB.prepare(
     "SELECT substr(at, 1, 10) AS day, state, COUNT(*) AS count FROM read_ledger WHERE at >= datetime('now', '-14 days') GROUP BY day, state ORDER BY day DESC",
   ).all<{ day: string; state: string; count: number }>();
-  return c.json({ ok: true, events: ENGAGEMENT_EVENTS, days: days.results, ledger: ledger.results });
+
+  // Inverted CALM metrics (Wave A #7): a calm-news app measures whether people
+  // FINISH (reach the end) and find something RELEVANT — not time-on-site or
+  // sessions/day, which we never track by design. Ratios only, over the window.
+  const sum = (ev: string) => (days.results ?? []).filter((d) => d.event === ev).reduce((a, d) => a + d.count, 0);
+  const rate = (num: number, den: number) => (den > 0 ? Math.round((num / den) * 100) / 100 : null);
+  const opened = sum("edition_opened");
+  const calmer = sum("survey_calmer"), same = sum("survey_same"), noisier = sum("survey_noisier");
+  const responses = calmer + same + noisier;
+  const calm = {
+    relevanceRate: rate(sum("first_relevant_story"), opened), // opens that led to a story worth reading
+    completionRate: rate(sum("edition_finished"), opened), // editions reached to the end (a calm win)
+    calmSentiment: { calmer, same, noisier, responses, calmRatio: rate(calmer, responses) },
+  };
+  return c.json({ ok: true, events: ENGAGEMENT_EVENTS, days: days.results, ledger: ledger.results, calm });
 });
 
 app.get("/api/persona/audit", async (c) => {

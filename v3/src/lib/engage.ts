@@ -21,6 +21,13 @@ export const ENGAGEMENT_EVENTS = [
   "topic_onboard_started",
   "topic_onboard_confirmed",
   "topic_onboard_skipped",
+  // Calm scorecard (Wave A #7): relevance + finishing + subjective calm — the
+  // inverted metrics. We celebrate reaching the END and finding something worth
+  // reading, never time-on-site or session count (deliberately never tracked).
+  "first_relevant_story",
+  "survey_calmer",
+  "survey_same",
+  "survey_noisier",
   "digest_email_opened",
   "recommendation_accepted",
 ] as const;

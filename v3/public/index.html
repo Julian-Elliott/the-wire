@@ -94,6 +94,11 @@
   .dp-w[aria-pressed="true"] { color: var(--bg); background: var(--accent); border-color: var(--accent); font-weight: 600; }
   .dp-add { color: var(--accent); border-color: var(--accent); }
   footer { text-align: center; color: var(--dim); font-size: 13px; padding: 20px; }
+  /* Calm check-in survey (Wave A #7): slim, infrequent, one tap, dismissible. */
+  .survey { max-width: 720px; margin: 12px auto 0; padding: 12px 16px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
+  .survey-q { margin: 0 0 8px; color: var(--ink); font-size: 15px; }
+  .survey-opts { display: flex; gap: 8px; flex-wrap: wrap; }
+  .survey-skip { color: var(--dim); }
   /* First-run chooser (the feed IS the chooser). Chips reuse .dp-w, so the
      selected state is the accent FILL from .dp-w[aria-pressed="true"] — never
      colour alone — and the global :focus-visible ring already covers them. */
@@ -245,6 +250,7 @@
         method: "POST", headers: { "content-type": "application/json" },
         body: JSON.stringify({ newestAt: catchupNewest }),
       });
+      sendEvent("edition_finished"); // a calm win: you reached the end (scorecard, Wave A #7)
     } catch { /* still show the caught-up state */ }
     loadCatchup();
   }
@@ -480,6 +486,7 @@
 
   // Anonymous engagement counts (no identifiers); never load-bearing.
   let editionCounted = false;
+  let firstRelevantSent = false; // first meaningful engagement per session (scorecard, Wave A #7)
   function sendEvent(event) {
     try {
       const body = JSON.stringify({ event });
@@ -629,10 +636,46 @@
         ? `${items.length} stories${data.ranked ? ", chosen for you" : ""} · updated ${when}`
         : "No stories yet");
       renderFeed();
-      if (!editionCounted && items.length) { editionCounted = true; sendEvent("edition_opened"); }
+      if (!editionCounted && items.length) {
+        editionCounted = true;
+        sendEvent("edition_opened");
+        maybeShowSurvey(); // once per session, throttled + gated inside
+      }
     } catch {
       say("Cannot load right now. Trying again shortly.");
     }
+  }
+
+  // A slim, infrequent calm check-in (scorecard, Wave A #7). At most once a
+  // week, only from the 3rd session on, one tap, fully dismissible — never
+  // nags. Measures subjective calm; if there's no storage we simply never ask.
+  const SURVEY_KEY = "wire_survey_at", SEEN_KEY = "wire_editions_seen";
+  const SURVEY_COOLDOWN_MS = 7 * 24 * 60 * 60 * 1000;
+  function maybeShowSurvey() {
+    if (!signedIn || onboardingActive || $("survey")) return;
+    let last = 0, seen = 0;
+    try {
+      last = Number(localStorage.getItem(SURVEY_KEY)) || 0;
+      seen = (Number(localStorage.getItem(SEEN_KEY)) || 0) + 1;
+      localStorage.setItem(SEEN_KEY, String(seen));
+    } catch { return; } // no storage → never ask
+    if (seen < 3 || Date.now() - last < SURVEY_COOLDOWN_MS) return;
+    const bar = document.createElement("section");
+    bar.id = "survey"; bar.className = "survey"; bar.setAttribute("aria-label", "A quick calm check-in");
+    const opt = (a, label) => `<button type="button" class="ctl" data-a="${a}">${label}</button>`;
+    bar.innerHTML =
+      '<p class="survey-q">Is The Wire leaving you calmer than the news you had before?</p>' +
+      '<div class="survey-opts" role="group" aria-label="Your answer">' +
+      opt("calmer", "Calmer") + opt("same", "About the same") + opt("noisier", "Noisier") +
+      '<button type="button" class="ctl survey-skip" data-a="skip">Not now</button></div>';
+    $("feed").parentNode.insertBefore(bar, $("feed"));
+    bar.querySelectorAll("button").forEach((b) => b.addEventListener("click", () => {
+      const a = b.dataset.a;
+      if (a === "calmer" || a === "same" || a === "noisier") sendEvent("survey_" + a);
+      try { localStorage.setItem(SURVEY_KEY, String(Date.now())); } catch { /* best effort */ }
+      bar.remove();
+      if (a !== "skip") say("Thanks — that helps keep The Wire calm.");
+    }));
   }
 
   // Close the topics panel with the Escape key (keyboard users).
@@ -646,6 +689,8 @@
     const item = currentItems.find((i) => i.url === a.getAttribute("href"));
     if (item) markRead(item);
     sendEvent("linkout_opened");
+    // The feed surfaced something worth opening — the relevance signal.
+    if (!firstRelevantSent) { firstRelevantSent = true; sendEvent("first_relevant_story"); }
   });
 
   whoami();
