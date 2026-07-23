@@ -2,6 +2,13 @@ import { DurableObject } from "cloudflare:workers";
 import type { Env } from "./env";
 import { SIGNAL_STRENGTH, decayed } from "./lib/decay";
 import { gzip } from "./lib/gz";
+import { MAX_SAVED_SEARCHES, searchId } from "./lib/search";
+
+// A saved search (the reader's search-to-desk): a durable query whose matching
+// stories JOIN the ranked feed like a followed desk. `vec` is the query
+// embedding captured ONCE at save time (null ⇒ AI was absent ⇒ matches
+// lexically forever-gracefully); `weight` is the Some/More/Lots dial.
+interface SavedSearch { id: string; q: string; vec: number[] | null; weight: number; createdAt: string; }
 
 // ProfileDO ("Persona") — one per user, keyed idFromName(userId)
 // (V3_BLUEPRINT §4). Derivation is strictly one-directional:
@@ -436,6 +443,52 @@ export class ProfileDO extends DurableObject<Env> {
       JSON.stringify(p),
     );
     return p;
+  }
+
+  // ---- Saved searches (the reader's search-to-desk) ------------------------
+  // meta['searches'] JSON: [{ id, q, vec, weight, createdAt }]. Durable user
+  // INTENT like follows — never decays. Vectors NEVER leave the DO (both HTTP
+  // projections emit {id,q,weight} only). Bounded by MAX_SAVED_SEARCHES.
+  private readSearches(): SavedSearch[] {
+    const row = this.ctx.storage.sql
+      .exec<{ value: string }>("SELECT value FROM meta WHERE key = 'searches'").toArray()[0];
+    if (!row) return [];
+    try { const a = JSON.parse(row.value); return Array.isArray(a) ? a : []; } catch { return []; }
+  }
+  private writeSearches(list: SavedSearch[]): void {
+    this.ctx.storage.sql.exec(
+      "INSERT INTO meta (key, value) VALUES ('searches', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+      JSON.stringify(list),
+    );
+  }
+
+  async getSearches(): Promise<SavedSearch[]> { return this.readSearches(); }
+
+  async addSearch(
+    q: string, vec: number[] | null, weight = 1,
+  ): Promise<{ searches: SavedSearch[]; added: boolean; reason?: string }> {
+    const text = String(q ?? "").replace(/\s+/g, " ").trim().slice(0, 120);
+    if (text.length < 2) return { searches: this.readSearches(), added: false, reason: "empty" };
+    const id = searchId(text); // deterministic djb2 ⇒ free dedup
+    const list = this.readSearches();
+    if (list.some((s) => s.id === id)) return { searches: list, added: false, reason: "duplicate" };
+    if (list.length >= MAX_SAVED_SEARCHES) return { searches: list, added: false, reason: "cap" };
+    const w = Math.min(3, Math.max(1, Math.round(weight) || 1));
+    list.push({ id, q: text, vec: vec ?? null, weight: w, createdAt: new Date().toISOString() });
+    this.writeSearches(list);
+    await this.markOnboarded(); // a saved search IS a real topic choice
+    return { searches: list, added: true };
+  }
+
+  // weight <= 0 = remove; 1..3 = strength. Mirrors setFollow.
+  async setSearchWeight(id: string, weight: number): Promise<SavedSearch[]> {
+    const list = this.readSearches();
+    const w = Math.round(weight);
+    const next = w <= 0
+      ? list.filter((s) => s.id !== String(id))
+      : list.map((s) => (s.id === String(id) ? { ...s, weight: Math.min(3, Math.max(1, w)) } : s));
+    this.writeSearches(next);
+    return next;
   }
 
   // Nightly NDJSON sweep (RUNBOOK §4): DO-SQLite has no platform export, so

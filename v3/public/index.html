@@ -94,6 +94,15 @@
   .dp-w[aria-pressed="true"] { color: var(--bg); background: var(--accent); border-color: var(--accent); font-weight: 600; }
   .dp-add { color: var(--accent); border-color: var(--accent); }
   footer { text-align: center; color: var(--dim); font-size: 13px; padding: 20px; }
+  /* 🔎 Search tier (Wave A #5): a temporary takeover of #feed, like Catch-up. */
+  .srch { padding: 8px 0 40px; }
+  .srch-form { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 0 0 6px; }
+  .srch-input { flex: 1 1 240px; min-width: 0; background: #0c0d10; color: var(--ink);
+    border: 1px solid var(--line); border-radius: 999px; padding: 9px 14px; font-size: 15px; }
+  .srch-input::placeholder { color: var(--dim); }
+  .srch-input:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; border-color: var(--accent); }
+  .srch-actions { margin: 8px 0 0; }
+  .srch-add { border-color: var(--accent); color: var(--accent); }
   /* Calm check-in survey (Wave A #7): slim, infrequent, one tap, dismissible. */
   .survey { max-width: 720px; margin: 12px auto 0; padding: 12px 16px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
   .survey-q { margin: 0 0 8px; color: var(--ink); font-size: 15px; }
@@ -146,6 +155,8 @@
   let currentItems = []; // whatever is rendered in #feed now (full feed or catch-up)
   let signedIn = false;
   let held = {}; // story_id -> "why held back" note (trust UX, §5)
+  // Search-to-desk (Wave A #5): a temporary tier in #feed, like Catch-up.
+  let searchDebounce = null, searchSeq = 0, searchActive = false, searchAbort = null;
 
   // First-run: the feed IS the chooser (PRODUCT_DIRECTION Wave A #3). A brand-
   // new user lands on tappable topic chips where the stream would be; each tap
@@ -191,6 +202,7 @@
         $("account").innerHTML =
           `<span aria-hidden="true" style="color:var(--dim);font-size:13px">${esc(me.name || "Signed in")}</span>` +
           ctlButton("catchupbtn", "Your finite catch-up edition", "☕ Catch-up") +
+          ctlButton("searchbtn", "Search for news and add it to your feed", "🔎 Search") +
           ctlButton("desksbtn", "Choose the topics you follow", "⚙ Topics") +
           ctlButton("alerts", "Turn on urgent alerts for this device", "🔔 Alerts") +
           ctlButton("setarea", "Set your home area for local alerts", "📍 Area") +
@@ -199,6 +211,7 @@
         $("alerts").addEventListener("click", enablePush);
         $("desksbtn").addEventListener("click", toggleDesks);
         $("catchupbtn").addEventListener("click", loadCatchup);
+        $("searchbtn").addEventListener("click", openSearch);
         loadDemotions();
       } else {
         $("account").innerHTML = `<a class="ctl" href="/auth/apple/login" style="border-color:var(--accent);color:var(--accent)">Sign in with Apple</a>`;
@@ -253,6 +266,83 @@
       sendEvent("edition_finished"); // a calm win: you reached the end (scorecard, Wave A #7)
     } catch { /* still show the caught-up state */ }
     loadCatchup();
+  }
+
+  // ---- Search-to-desk (PRODUCT_DIRECTION Wave A #5) --------------------------
+  // A temporary tier in #feed, cloned from the Catch-up takeover: live search
+  // over your own feed; each result can be SAVED so its stories join the feed.
+  function openSearch(e) {
+    if (e) e.preventDefault();
+    if (onboardingActive) { onboardingActive = false; clearTimeout(previewTimer); } // leave first-run cleanly
+    // Close the Topics panel WITHOUT load() — closeDesks() would fire a feed
+    // fetch that resolves later and clobbers the search takeover (verify fix).
+    if (!$("panel").hidden) $("panel").hidden = true;
+    searchActive = true;
+    sendEvent("search_onboard_started");
+    $("feed").innerHTML =
+      '<section class="srch" aria-labelledby="srch-h">' +
+        '<h2 id="srch-h" class="onb-title" tabindex="-1">Search the news</h2>' +
+        '<p class="onb-sub">Find current stories on any topic. Save a search and its stories join your feed, just like following a topic.</p>' +
+        '<form id="srchForm" role="search" class="srch-form">' +
+          '<label class="sr-only" for="srchInput">Search for news</label>' +
+          '<input id="srchInput" name="q" type="search" class="srch-input" autocomplete="off" maxlength="120" ' +
+            'enterkeyhint="search" placeholder="e.g. flooding in Yorkshire, Tesla, interest rates">' +
+          '<button type="button" class="ctl" id="srchBack">Back to feed</button>' +
+        '</form>' +
+        '<p id="srchStatus" class="onb-count" role="status" aria-live="polite">Type to search current stories.</p>' +
+        '<ol id="srchResults" class="feed-list" aria-label="Search results"></ol>' +
+      '</section>';
+    $("srchForm").addEventListener("submit", (ev) => ev.preventDefault());
+    $("srchBack").addEventListener("click", load); // load() clears searchActive + rebuilds
+    const input = $("srchInput");
+    input.addEventListener("input", () => { clearTimeout(searchDebounce); searchDebounce = setTimeout(runSearch, 250); });
+    input.focus(); say("Search the news");
+  }
+
+  async function runSearch() {
+    const input = $("srchInput"); if (!input) return;
+    const q = input.value.trim(), results = $("srchResults"), status = $("srchStatus");
+    if (q.length < 2) { if (results) results.innerHTML = ""; if (status) status.textContent = "Type to search current stories."; return; }
+    if (searchAbort) searchAbort.abort(); // cancel the stale in-flight request
+    searchAbort = new AbortController();
+    const seq = ++searchSeq; status.textContent = "Searching…";
+    let data;
+    try { data = await (await fetch("/api/search?q=" + encodeURIComponent(q), { signal: searchAbort.signal })).json(); }
+    catch (err) { if (err && err.name !== "AbortError") status.textContent = "Could not search right now. Please try again."; return; }
+    if (seq !== searchSeq) return; // superseded by a newer keystroke (belt + braces)
+    if (!data.ok) { status.textContent = "Sign in to search."; return; }
+    const list = data.items || []; currentItems = list; // so result link-outs markRead + telemetry work
+    if (!list.length) { results.innerHTML = ""; status.textContent = "No current stories match “" + q + "”. Try a broader word — or check back as new stories arrive."; return; }
+    status.textContent = data.count + (data.count === 1 ? " story" : " stories") + " match “" + q + "”" + (data.ai ? "" : " (matching by words)");
+    results.innerHTML = list.map((i) => searchResultCard(i, q)).join("");
+    results.querySelectorAll(".srch-add").forEach((b) => b.addEventListener("click", () => saveSearch(input.value.trim(), b)));
+  }
+
+  // Reuse the source-first card, inject one "Add to my feed" action.
+  function searchResultCard(i, q) {
+    const add = '<p class="srch-actions"><button type="button" class="ctl srch-add" ' +
+      'aria-label="Save the search ' + esc(q) + ' and add its stories to your feed">＋ Add to my feed</button></p>';
+    return renderCard(i).replace("</article></li>", add + "</article></li>");
+  }
+
+  async function saveSearch(q, btn) {
+    if (!q || q.length < 2) return;
+    if (btn) { btn.disabled = true; btn.textContent = "Adding…"; }
+    let data;
+    try { data = await (await fetch("/api/me/searches", { method: "POST",
+      headers: { "content-type": "application/json" }, body: JSON.stringify({ q }) })).json(); }
+    catch { if (btn) { btn.disabled = false; btn.textContent = "＋ Add to my feed"; } say("Could not save your search."); return; }
+    const status = $("srchStatus");
+    if (data.ok) {
+      sendEvent("search_onboard_confirmed");
+      if (btn) btn.textContent = "✓ Added to your feed";
+      if (status) status.textContent = "“" + q + "” saved — its stories now join your feed. Manage saved searches in ⚙ Topics.";
+    } else if (data.reason === "duplicate") {
+      if (btn) { btn.disabled = false; btn.textContent = "✓ Already in your feed"; } // re-enable (verify fix)
+    } else if (data.reason === "cap") {
+      if (status) status.textContent = "You’ve reached the maximum saved searches. Remove one in ⚙ Topics first.";
+      if (btn) { btn.disabled = false; btn.textContent = "＋ Add to my feed"; }
+    } else if (btn) { btn.disabled = false; btn.textContent = "＋ Add to my feed"; }
   }
 
   // ---- First run: the feed IS the chooser (PRODUCT_DIRECTION Wave A #3) ------
@@ -388,6 +478,7 @@
       const d = await res.json();
       const follows = d.follows || {};
       const pitches = d.pitches || {};
+      const searches = d.searches || []; // saved searches join the feed like desks (Wave A #5)
       const followed = Object.keys(follows).sort();
       const notFollowed = (d.available || []).filter((x) => follows[x] === undefined).sort();
       const PITCH_LABELS = { 0: "Explain it", 1: "Normal", 2: "Insider" };
@@ -413,6 +504,14 @@
           <span class="dp-name" style="color:var(--dim)">${esc(desk)}</span>
           <button type="button" class="dp-w dp-add" data-desk="${esc(desk)}" data-w="1" aria-label="Follow ${esc(desk)}">Follow</button>
         </div>`;
+      const searchRow = (s) => `
+        <div class="dp-row">
+          <span class="dp-name">🔎 ${esc(s.q)}</span>
+          <span class="dp-weights" role="group" aria-label="How much of the search ${esc(s.q)} to show">
+            ${[1, 2, 3].map((w) => `<button type="button" class="dp-w" aria-pressed="${s.weight === w}" data-search="${esc(s.id)}" data-w="${w}">${WEIGHT_LABELS[w]}</button>`).join("")}
+            <button type="button" class="dp-w" data-search="${esc(s.id)}" data-w="0" aria-label="Remove saved search ${esc(s.q)}">Remove</button>
+          </span>
+        </div>`;
       panel.innerHTML =
         '<div class="dp-title"><span>Choose the topics you follow</span><button type="button" class="ctl" id="dp-close">Done</button></div>' +
         '<div class="dp-body">' +
@@ -420,15 +519,20 @@
           ? `<h2 class="dp-sub" style="margin-top:4px">Following</h2>${followed.map(followRow).join("")}`
           : '<p style="color:var(--dim);margin:8px 0">You’re only seeing urgent news right now. Pick the topics you want below and they’ll fill your feed.</p>') +
         (notFollowed.length ? `<h2 class="dp-sub">Add a topic</h2>${notFollowed.map(addRow).join("")}` : "") +
+        (searches.length ? `<h2 class="dp-sub">Saved searches</h2>${searches.map(searchRow).join("")}` : "") +
         "</div>";
       $("dp-close").addEventListener("click", closeDesks);
       panel.querySelectorAll(".dp-w").forEach((b) =>
         b.addEventListener("click", async () => {
-          const payload = b.dataset.pitch !== undefined
-            ? { desk: b.dataset.desk, pitch: Number(b.dataset.pitch) }
-            : { desk: b.dataset.desk, weight: Number(b.dataset.w) };
+          const isSearch = b.dataset.search !== undefined;
+          const url = isSearch ? "/api/me/searches" : "/api/me/desks";
+          const payload = isSearch
+            ? { id: b.dataset.search, weight: Number(b.dataset.w) }
+            : b.dataset.pitch !== undefined
+              ? { desk: b.dataset.desk, pitch: Number(b.dataset.pitch) }
+              : { desk: b.dataset.desk, weight: Number(b.dataset.w) };
           try {
-            await fetch("/api/me/desks", {
+            await fetch(url, {
               method: "POST", headers: { "content-type": "application/json" },
               body: JSON.stringify(payload),
             });
@@ -602,6 +706,7 @@
           ${p.type === "civic" ? '<span class="badge type">Official record</span>' : ""}
           ${i.priority === 3 ? '<span class="badge urgent">Urgent</span>' : ""}
           ${i.saga ? '<span class="badge">Ongoing story</span>' : ""}
+          ${i.searchQ ? `<span class="badge">🔎 ${esc(i.searchQ)}</span>` : ""}
           ${showDesk ? `<span class="desk">${esc(deskName)}</span>` : ""}
           <span>${esc(ago(i.addedAt))}</span>
           ${i.rankWhy ? `<span class="rankwhy" tabindex="0" title="Why you're seeing this: ${esc(i.rankWhy)}" aria-label="Why you're seeing this: ${esc(i.rankWhy)}">★</span>` : ""}
@@ -625,9 +730,13 @@
   }
 
   async function load() {
+    searchActive = false; // the search tier's way back (Back-to-feed / Escape)
     if (onboardingActive) return; // don't clobber an in-progress chooser
     try {
       const data = await (await fetch("/api/feed/latest?limit=100")).json();
+      // A search takeover opened while this fetch was in flight — don't clobber
+      // it (neutralises the initial load / 5-min interval race; verify fix).
+      if (searchActive) return;
       if (data.onboarding) { startOnboarding(); return; } // brand-new / never-chose → inline chooser
       items = data.items ?? [];
       currentItems = items;
@@ -678,8 +787,9 @@
     }));
   }
 
-  // Close the topics panel with the Escape key (keyboard users).
+  // Escape closes the search tier or the topics panel (keyboard users).
   document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && searchActive) { load(); return; } // leave the search tier
     if (e.key === "Escape" && !$("panel").hidden) closeDesks();
   });
 
@@ -695,7 +805,7 @@
 
   whoami();
   load();
-  setInterval(load, 5 * 60 * 1000);
+  setInterval(() => { if (!searchActive) load(); }, 5 * 60 * 1000); // never clobber an open search
 })();
 </script>
 </body>

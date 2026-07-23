@@ -7,12 +7,17 @@ import {
   PERSONA_TOOLS, verifyPersonaToken, type PersonaClaims,
 } from "./lib/persona-token";
 import { clampPitch, cleanPitches, pickSummary, type PitchLevel } from "./lib/pitch";
-import { analyseDesk, buildCentroid, meanVector, type DeskAnalysis } from "./lib/preference";
-import { rankStories, whyRanked, type RankableStory } from "./lib/rank";
+import { analyseDesk, buildCentroid, centre, meanVector, type DeskAnalysis } from "./lib/preference";
+import { rankStories, whyRanked, recencyFactor, type RankableStory } from "./lib/rank";
 import { runSignals } from "./signals";
 import { dedupeBatch, isStale, titleKey, urlKey } from "./lib/dedup";
 import { SUMMARY_MAX, TITLE_STORE_MAX, URL_STORE_MAX, cleanDeskId } from "./lib/text";
 import { embedTexts, embeddingInput } from "./lib/embed";
+import { cosine } from "./lib/cluster";
+import {
+  SEARCH_CAP, SEARCH_COS_MIN, SAVED_COS_MIN,
+  normalizeQuery, queryTokens, scoreAgainstQuery,
+} from "./lib/search";
 import { canonHost, canonUrl } from "./lib/urls";
 import { validateBatch, type IngestItem } from "./lib/validate";
 import {
@@ -63,6 +68,7 @@ interface PersonaContext {
   dials: Record<string, number>;
   topDesks: { desk: string; weight: number }[];
 }
+type SavedSearchRow = { id: string; q: string; vec: number[] | null; weight: number; createdAt: string };
 const profileStub = (env: Env, uid: string) =>
   env.PROFILES.get(env.PROFILES.idFromName(uid)) as unknown as {
     exportToR2(uid: string, dateIso: string): Promise<{ key: string; rows: number }>;
@@ -77,6 +83,9 @@ const profileStub = (env: Env, uid: string) =>
     getFollowState(): Promise<{ follows: Record<string, number>; onboarded: boolean }>;
     markOnboarded(): Promise<void>;
     setFollow(desk: string, weight: number): Promise<Record<string, number>>;
+    getSearches(): Promise<SavedSearchRow[]>;
+    addSearch(q: string, vec: number[] | null, weight?: number): Promise<{ searches: SavedSearchRow[]; added: boolean; reason?: string }>;
+    setSearchWeight(id: string, weight: number): Promise<SavedSearchRow[]>;
     getPitches(): Promise<Record<string, number>>;
     setPitch(desk: string, level: number): Promise<Record<string, number>>;
     getCatchupAt(): Promise<string | null>;
@@ -522,26 +531,58 @@ async function rankedForUser(
   const items = await newsroom(env).feed(poolLimit, uid);
   const nr = env.NEWSROOM.get(env.NEWSROOM.idFromName("main")) as unknown as NewsroomEmbeds;
   const pstub = profileStub(env, uid);
-  const [withVecs, followState, pitchPrefs] = await Promise.all([
+  const [withVecs, followState, pitchPrefs, savedSearches] = await Promise.all([
     nr.feedWithEmbeddings(Math.max(poolLimit, 100)),
     pstub.getFollowState(),
     pstub.getPitches(),
+    pstub.getSearches(),
   ]);
   const { follows, onboarded } = followState;
   const vecById = new Map(withVecs.map((r) => [r.story_id, r.vec]));
   const model = await buildUserModel(env, uid, withVecs.map((r) => ({ story_id: r.story_id, desk: r.desk, vec: r.vec })));
 
-  // Chose topics → your desks + anything genuinely urgent. Chose nothing
-  // (onboarded, empty follows) → urgent only, NEVER every desk. Never chose
-  // (brand-new, no row) → the full pool, but the reader diverts that user to
-  // the inline first-run chooser (onboarding:true) and never renders it — so
-  // the firehose is a client-gated fallback, not a surface. Keeping the no-row
-  // branch preserves the signal-only ranked path feed-ranked/areas tests cover.
-  const visible = Object.keys(follows).length > 0
-    ? items.filter((s) => s.priority === 3 || follows[s.desk] !== undefined)
-    : onboarded
-      ? items.filter((s) => s.priority === 3)
-      : items;
+  // Saved searches JOIN the feed like desks (Wave A #5). Precompute each query's
+  // vector/tokens ONCE (no re-embed on the hot path), then find the stories they
+  // match — iterating `items` ONLY (=== feed(uid), the privacy gate), at the
+  // stricter SAVED_COS_MIN floor so a permanent join is higher-precision than
+  // the transient instant search.
+  const saved = savedSearches.map((s) => ({
+    id: s.id, q: s.q, weight: s.weight,
+    vec: s.vec ? Float32Array.from(s.vec) : null,
+    tokens: queryTokens(s.q), normQ: normalizeQuery(s.q),
+  }));
+  const searchHitById = new Map<string, { q: string; weight: number; queryCos: number }>();
+  if (saved.length) {
+    for (const s of items) {
+      const raw = vecById.get(s.story_id);
+      const storyVec = raw ? Float32Array.from(raw) : null;
+      const text = normalizeQuery(s.title + " " + s.summary);
+      let best: { q: string; weight: number; queryCos: number } | null = null;
+      for (const qq of saved) {
+        if (!scoreAgainstQuery(qq.vec, qq.tokens, qq.normQ, storyVec, text, SAVED_COS_MIN).hit) continue;
+        if (!best || qq.weight > best.weight) {
+          // Mean-centred query↔story cosine for the rank tilt (matches how desk
+          // affinity is scored — the anisotropy fix).
+          const queryCos = qq.vec && storyVec && model.corpusMean
+            ? Math.max(0, cosine(centre(qq.vec, model.corpusMean), centre(storyVec, model.corpusMean)))
+            : 0;
+          best = { q: qq.q, weight: qq.weight, queryCos };
+        }
+      }
+      if (best) searchHitById.set(s.story_id, best);
+    }
+  }
+
+  const followed = Object.keys(follows).length > 0;
+  // The original three-branch gate. A saved search only ever ADDS ids already
+  // in `items`, so the feed can never widen past feed(uid).
+  //   chose topics → your desks + urgent; chose nothing → urgent only;
+  //   never-chose → the full pool (client-gated to the first-run chooser).
+  const matchesBase = (s: FeedRow) =>
+    followed ? (s.priority === 3 || follows[s.desk] !== undefined)
+    : onboarded ? s.priority === 3
+    : true;
+  const visible = items.filter((s) => matchesBase(s) || searchHitById.has(s.story_id));
 
   const rankable: (RankableStory & { src: FeedRow })[] = visible.map((s) => ({
     id: s.story_id, desk: s.desk, salience: s.salience,
@@ -556,19 +597,36 @@ async function rankedForUser(
     deskCentroid: (d: string) => model.centroidByDesk.get(d) ?? null,
     corpusMean: model.corpusMean,
   };
+  const SEARCH_LAMBDA = 1.0; // mirrors rank.ts affinity weight
   const ranked = rankStories(rankable, ctx);
+  // A search-only story (pulled in PURELY by a saved search, not a followed desk
+  // and not urgent) ranks as searchWeight × salience × recency × (1 + query
+  // affinity) — the principled "join like a desk". Post-rank, so rank.ts is
+  // untouched; a story that ALSO matches a followed desk keeps its normal score.
+  const effScore = new Map<(typeof ranked)[number], number>();
+  for (const r of ranked) {
+    const hit = searchHitById.get(r.story.src.story_id);
+    effScore.set(r,
+      hit && !matchesBase(r.story.src)
+        ? hit.weight * r.components.salience * r.components.recency * (1 + SEARCH_LAMBDA * hit.queryCos)
+        : r.score);
+  }
   ranked.sort((a, b) => {
     const pa = a.story.src.priority === 3 ? 1 : 0;
     const pb = b.story.src.priority === 3 ? 1 : 0;
-    return pb - pa || b.score - a.score;
+    return pb - pa || effScore.get(b)! - effScore.get(a)!;
   });
   const shaped = ranked.map((r) => {
     const level = clampPitch(pitchPrefs[r.story.desk] ?? 1);
+    const hit = searchHitById.get(r.story.src.story_id);
+    const searchOnly = !!hit && !matchesBase(r.story.src); // tag ONLY when it arrived via search
     return shapeStory(r.story.src, {
       summary: pickSummary(r.story.src, level),
       pitch: level as PitchLevel,
-      rankScore: Math.round(r.score * 1000) / 1000,
-      rankWhy: whyRanked(r.components, r.story.desk),
+      rankScore: Math.round(effScore.get(r)! * 1000) / 1000,
+      // A search-only story's reason is the search, not its (unfollowed) desk.
+      rankWhy: searchOnly ? `matches your saved search “${hit!.q}”` : whyRanked(r.components, r.story.desk),
+      searchQ: searchOnly ? hit!.q : undefined, // spread by shapeStory; undefined ⇒ omitted from JSON
     });
   });
   return { items: shaped, onboarded };
@@ -636,6 +694,44 @@ app.post("/api/feed/catchup/done", async (c) => {
   const mark = newestAt && !Number.isNaN(Date.parse(newestAt)) ? newestAt : new Date().toISOString();
   await profileStub(c.env, sess.uid).setCatchupAt(mark);
   return c.json({ ok: true, since: mark });
+});
+
+// ---- Search-to-desk: instant search (PRODUCT_DIRECTION Wave A #5) -----------
+// A live search over the caller's OWN feed (the privacy gate). Semantic-primary
+// (bge-m3 cosine) + lexical fallback; degrades to lexical-only and never errors
+// when env.AI is absent. The results are byte-identical shapeStory objects, so
+// the reader renders them with the same source-first card as the feed.
+app.get("/api/search", async (c) => {
+  const sess = await sessionOf(c);
+  if (!sess) return c.json({ ok: false, error: "sign in required" }, 401);
+  const q = String(c.req.query("q") ?? "").replace(/\s+/g, " ").trim().slice(0, 120);
+  if (q.length < 2) return c.json({ ok: true, ai: !!c.env.AI, q, count: 0, items: [] });
+
+  const nr = c.env.NEWSROOM.get(c.env.NEWSROOM.idFromName("main")) as unknown as NewsroomEmbeds;
+  const [pool, withVecs, qvecs] = await Promise.all([
+    newsroom(c.env).feed(200, sess.uid), // PRIVACY GATE — audience-filtered
+    nr.feedWithEmbeddings(200), // NOT audience-filtered → used only as a vector dictionary
+    embedTexts(c.env.AI, [q]),
+  ]);
+  const queryVec = qvecs[0] ?? null; // null ⇒ AI absent ⇒ pure lexical
+  const poolIds = new Set(pool.map((s) => s.story_id));
+  const vecById = new Map(withVecs.filter((r) => poolIds.has(r.story_id)).map((r) => [r.story_id, r.vec]));
+
+  const qTokens = queryTokens(q);
+  const normQ = normalizeQuery(q);
+  const now = Date.now();
+  const scored: { s: FeedRow; score: number }[] = [];
+  for (const s of pool) {
+    const raw = vecById.get(s.story_id); // pool ids only — the gate is honoured
+    const storyVec = raw ? Float32Array.from(raw) : null;
+    const r = scoreAgainstQuery(queryVec, qTokens, normQ, storyVec, normalizeQuery(s.title + " " + s.summary), SEARCH_COS_MIN);
+    if (!r.hit) continue;
+    const rec = recencyFactor(now - (Date.parse(s.added_at) || now)); // gentle freshness tilt
+    scored.push({ s, score: r.score * (0.7 + 0.3 * rec) });
+  }
+  scored.sort((a, b) => b.score - a.score);
+  const items = scored.slice(0, SEARCH_CAP).map(({ s }) => shapeStory(s));
+  return c.json({ ok: true, ai: queryVec != null, q, count: items.length, items });
 });
 
 app.get("/", (c) =>
@@ -814,13 +910,15 @@ app.get("/api/me/desks", async (c) => {
   const sess = await sessionOf(c);
   if (!sess) return c.json({ ok: false, error: "sign in required" }, 401);
   const stub = profileStub(c.env, sess.uid);
-  const [{ follows, onboarded }, pitches, feed] = await Promise.all([
+  const [{ follows, onboarded }, pitches, feed, searches] = await Promise.all([
     stub.getFollowState(),
     stub.getPitches(),
     newsroom(c.env).feed(200, sess.uid),
+    stub.getSearches(),
   ]);
   const available = [...new Set(feed.map((s) => s.desk))].sort();
-  return c.json({ ok: true, follows, pitches, available, onboarded });
+  return c.json({ ok: true, follows, pitches, available, onboarded,
+    searches: searches.map((s) => ({ id: s.id, q: s.q, weight: s.weight })) }); // never emit vec
 });
 
 app.post("/api/me/desks", async (c) => {
@@ -850,6 +948,34 @@ app.post("/api/me/desks", async (c) => {
   const follows = p.weight !== undefined ? await stub.setFollow(desk, Number(p.weight) || 0) : await stub.getFollows();
   const pitches = p.pitch !== undefined ? await stub.setPitch(desk, Number(p.pitch)) : await stub.getPitches();
   return c.json({ ok: true, follows, pitches });
+});
+
+// ---- Saved searches (search-to-desk CRUD) ----------------------------------
+// {q} adds (embeds ONCE, stores the vector in the ProfileDO); {id,weight} sets
+// the Some/More/Lots dial, weight 0 removes. Mirrors /api/me/desks so the
+// reader's .dp-w delegation is reused. Vectors NEVER leave the DO.
+app.post("/api/me/searches", async (c) => {
+  const sess = await sessionOf(c);
+  if (!sess) return c.json({ ok: false, error: "sign in required" }, 401);
+  const bodyText = await readBodyBounded(c.req.raw, 2 * 1024);
+  if (bodyText === null) return c.json({ ok: false }, 413);
+  let p: { q?: string; id?: string; weight?: number };
+  try { p = JSON.parse(bodyText); } catch { return c.json({ ok: false, error: "invalid JSON" }, 400); }
+  const stub = profileStub(c.env, sess.uid);
+  const project = (list: SavedSearchRow[]) => list.map((s) => ({ id: s.id, q: s.q, weight: s.weight }));
+  if (typeof p.id === "string" && p.id) {
+    // Adjust / remove. A missing or non-numeric weight is a no-op, NOT a delete
+    // (only an explicit weight <= 0 removes) — a malformed call must never wipe.
+    const w = Number(p.weight);
+    if (!Number.isFinite(w)) return c.json({ ok: false, error: "bad weight" }, 400);
+    const searches = await stub.setSearchWeight(p.id, w);
+    return c.json({ ok: true, searches: project(searches) });
+  }
+  const q = String(p.q ?? "").replace(/\s+/g, " ").trim().slice(0, 120);
+  if (q.length < 2) return c.json({ ok: false, error: "query too short" }, 400);
+  const [vec] = await embedTexts(c.env.AI, [q]); // null ⇒ a lexical-only saved search
+  const res = await stub.addSearch(q, vec ? [...vec] : null, p.weight !== undefined ? Number(p.weight) : 1);
+  return c.json({ ok: res.added, reason: res.reason, searches: project(res.searches) });
 });
 
 // ---- Web Push (personas' #2: reach every user, not just ntfy) --------------
